@@ -3,9 +3,12 @@ import { getGeminiModel, getGeminiClient } from '../config/gemini';
 import { dietPlanRepository } from '../repositories/dietPlan.repository';
 import { chatMessageRepository } from '../repositories/chatMessage.repository';
 import { userRepository } from '../repositories/user.repository';
+import { mealRepository } from '../repositories/meal.repository';
+import { goalRepository } from '../repositories/goal.repository';
 import { ApiError } from '../utils/ApiError';
 import { calculateBMR, calculateTDEE } from '../utils/macroCalculator';
 import { logger } from '../utils/logger';
+import { format } from 'date-fns';
 
 export interface DietGenerationInput {
   age: number;
@@ -16,8 +19,12 @@ export interface DietGenerationInput {
   activityLevel: string;
   foodPreference: string;
   budget?: string;
+  /** Real daily food budget in rupees, e.g. 350. Takes priority over the `budget` tier label when set. */
+  budgetAmountInr?: number;
   allergies?: string[];
   mealsPerDay?: number;
+  /** Free-text notes for anything not covered by the fixed fields (custom goal, custom diet, medical notes, etc.) */
+  notes?: string;
   // Human-readable labels from the frontend UI
   fitnessGoalLabel?: string;
   dietTypeLabel?: string;
@@ -123,12 +130,19 @@ Return ONLY valid JSON, no markdown.`;
     // Limit history length to last 15 messages for Gemini context efficiency
     const recentHistory = rawHistory.slice(-15);
 
-    // 3. Get user details for system instructions
-    const user = await userRepository.findById(userId);
-    let systemInstruction = `You are Aria, a friendly, professional, and knowledgeable AI Dietitian and fitness coach for Calorique. You help users with meal planning, nutrition advice, calorie and macro tracking, and workouts. Your recommendations should be highly practical, emphasizing Indian foods where relevant, and customized to the user's specific fitness goals. Keep your responses concise, encouraging, and formatted in clear, readable markdown with emojis.
-Always respond with a JSON object containing two fields:
+    // 3. Get user details + today's real macro progress for grounded, proactive coaching
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const [user, goal, todaysMeal] = await Promise.all([
+      userRepository.findById(userId),
+      goalRepository.findByUserId(userId),
+      mealRepository.findByUserAndDate(userId, today),
+    ]);
+
+    let systemInstruction = `You are Aria, a friendly, professional, and knowledgeable AI Dietitian and fitness coach for Calorique. You help users with meal planning, nutrition advice, calorie and macro tracking, and workouts. Your recommendations should be highly practical, emphasizing Indian foods where relevant, and customized to the user's specific fitness goals. Keep your responses concise, encouraging, and formatted in clear, readable markdown with emojis. Reference the user's actual remaining macros for today when relevant instead of speaking generically.
+Always respond with a JSON object containing these fields:
 - "reply": a string (using markdown format) containing your coaching response to the user.
 - "suggestions": an array of 2 to 3 short strings, representing relevant follow-up query chips/quick suggestions the user might want to click next.
+- "foodSuggestions": OPTIONAL array (only include when you're recommending specific foods/meals to eat) of objects: {"name": string, "quantity": string (e.g. "100g" or "2 pieces"), "calories": number, "protein": number, "carbs": number, "fats": number}. Keep quantities realistic and Indian-market-common. Omit this field entirely if you aren't recommending specific food items in this reply.
 `;
 
     if (user) {
@@ -142,6 +156,15 @@ Always respond with a JSON object containing two fields:
 - Food Preference: ${user.foodPreference || 'Not set'}
 - Allergies: ${user.allergies?.join(', ') || 'None'}
 - Budget Preference: ${user.budget || 'medium'}`;
+    }
+
+    if (goal) {
+      const eaten = todaysMeal?.dailyTotals ?? { calories: 0, protein: 0, carbs: 0, fats: 0 };
+      systemInstruction += `\n\nToday's Progress (${today}):
+- Calories: ${Math.round(eaten.calories)} / ${goal.targetCalories} kcal eaten (${Math.max(0, Math.round(goal.targetCalories - eaten.calories))} kcal remaining)
+- Protein: ${Math.round(eaten.protein)}g / ${goal.targetProtein}g (${Math.max(0, Math.round(goal.targetProtein - eaten.protein))}g remaining)
+- Carbs: ${Math.round(eaten.carbs)}g / ${goal.targetCarbs}g (${Math.max(0, Math.round(goal.targetCarbs - eaten.carbs))}g remaining)
+- Fats: ${Math.round(eaten.fats)}g / ${goal.targetFats}g (${Math.max(0, Math.round(goal.targetFats - eaten.fats))}g remaining)`;
     }
 
     if (context) {
@@ -173,9 +196,13 @@ Always respond with a JSON object containing two fields:
       const result = await chat.sendMessage(messageText);
       const replyText = result.response.text().trim();
 
-      let parsedReply = {
+      let parsedReply: {
+        reply: string;
+        suggestions: string[];
+        foodSuggestions?: Array<{ name: string; quantity: string; calories: number; protein: number; carbs: number; fats: number }>;
+      } = {
         reply: '',
-        suggestions: [] as string[],
+        suggestions: [],
       };
 
       try {
@@ -209,6 +236,7 @@ Always respond with a JSON object containing two fields:
           timestamp: assistantMsg.createdAt.toISOString(),
         },
         suggestions: parsedReply.suggestions,
+        foodSuggestions: parsedReply.foodSuggestions ?? [],
       };
     } catch (err: any) {
       const errMsg = err?.message ?? String(err);
@@ -225,8 +253,13 @@ function buildDietPrompt(input: DietGenerationInput, tdee: number): string {
   const names   = ['Monday','Tuesday','Wednesday'].slice(0, days);
   const goal    = input.fitnessGoalLabel ?? input.goal;
   const diet    = input.dietTypeLabel    ?? input.foodPreference;
-  const budget  = input.budgetLabel      ?? input.budget ?? 'standard';
   const allergy = input.allergies?.length ? input.allergies.join(', ') : 'None';
+
+  // A real ₹/day amount always wins over the coarse tier label — it lets the model
+  // pick specific, price-appropriate Indian foods instead of a vague "budget-friendly" gloss.
+  const budget = input.budgetAmountInr
+    ? `₹${input.budgetAmountInr}/day (must keep the day's ingredient cost within this)`
+    : (input.budgetLabel ?? input.budget ?? 'standard');
 
   // Calorie target based on goal
   const calMap: Record<string,number> = {
@@ -242,10 +275,11 @@ function buildDietPrompt(input: DietGenerationInput, tdee: number): string {
 User: ${input.age}y ${input.gender}, ${input.weight}kg, ${input.height}cm, ${input.activityLevel}
 Goal: ${goal} | Diet: ${diet} | Budget: ${budget} | Avoid: ${allergy}
 Target: ${targetCal} kcal/day
-
+${input.notes ? `Additional notes from user (follow closely — may include custom goals, diet styles, or medical/preference details not covered above): ${input.notes}\n` : ''}
 Generate a ${days}-day Indian meal plan for days: ${names.join(', ')}.
 Each day: breakfast (8am), lunch (1pm), snack (4pm), dinner (8pm).
 Each meal: 2-3 foods maximum. Keep foods simple and common in India.
+${input.budgetAmountInr ? `Include an "estimatedCost" number (in ₹) on each meal reflecting realistic Indian market prices for the ingredients used.\n` : ''}
 
 Schema (return exactly this structure):
 {
@@ -268,11 +302,11 @@ Schema (return exactly this structure):
           "mealCalories": 400,
           "mealProtein": 25,
           "mealCarbs": 40,
-          "mealFats": 12
+          "mealFats": 12${input.budgetAmountInr ? ',\n          "estimatedCost": 45' : ''}
         }
       ],
       "totalCalories": ${targetCal},
-      "totalProtein": number
+      "totalProtein": number${input.budgetAmountInr ? ',\n      "totalEstimatedCost": number' : ''}
     }
   ],
   "tips": ["tip1", "tip2"],

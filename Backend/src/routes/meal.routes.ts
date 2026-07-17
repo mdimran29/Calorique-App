@@ -20,6 +20,24 @@ const foodItemValidation = [
 ];
 
 router.get('/search', mealController.searchFood);
+router.get('/history', mealController.getMealHistory);
+router.get(
+  '/summary/:date',
+  [param('date').matches(/^\d{4}-\d{2}-\d{2}$/)],
+  validate,
+  mealController.getDailySummary
+);
+
+router.post(
+  '/water',
+  [
+    body('date').matches(/^\d{4}-\d{2}-\d{2}$/),
+    body('glasses').isInt({ min: 0, max: 30 }),
+  ],
+  validate,
+  mealController.logWater
+);
+
 router.get('/', mealController.getMeals);
 
 router.post(
@@ -31,6 +49,13 @@ router.post(
   ],
   validate,
   mealController.createMeal
+);
+
+router.get(
+  '/:id',
+  [param('id').isMongoId()],
+  validate,
+  mealController.getMealById
 );
 
 router.put(

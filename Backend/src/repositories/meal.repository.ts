@@ -45,4 +45,12 @@ export const mealRepository = {
   async deleteById(id: string | Types.ObjectId): Promise<void> {
     await Meal.findByIdAndDelete(id);
   },
+
+  async setWaterGlasses(userId: string | Types.ObjectId, date: string, glasses: number): Promise<IMeal> {
+    return Meal.findOneAndUpdate(
+      { userId, date },
+      { $set: { waterGlasses: glasses } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ) as Promise<IMeal>;
+  },
 };

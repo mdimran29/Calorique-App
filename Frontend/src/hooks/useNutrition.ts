@@ -1,6 +1,6 @@
 // hooks/useNutrition.ts — Food search hooks (Spoonacular / custom DB)
 
-import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { nutritionApi, type FoodSearchParams } from '../api/nutrition.api';
 import { useDebounce } from './useDebounce';
 import { STALE_TIME_MS } from '../utils/constants';
@@ -12,7 +12,6 @@ export const nutritionKeys = {
   search:      (params: FoodSearchParams) => ['nutrition', 'search', params] as const,
   barcode:     (code: string) => ['nutrition', 'barcode', code] as const,
   food:        (id: string)   => ['nutrition', 'food', id] as const,
-  autocomplete:(q: string)    => ['nutrition', 'autocomplete', q] as const,
 };
 
 // ── Food Search ───────────────────────────────────────────────────────
@@ -24,19 +23,6 @@ export function useFoodSearch(query: string, params?: Omit<FoodSearchParams, 'qu
     queryKey: nutritionKeys.search({ query: debouncedQuery, ...params }),
     queryFn:  () => nutritionApi.searchFood({ query: debouncedQuery, ...params }),
     enabled:  debouncedQuery.trim().length > 1,
-    staleTime: STALE_TIME_MS,
-  });
-}
-
-// ── Autocomplete ──────────────────────────────────────────────────────
-
-export function useFoodAutocomplete(query: string) {
-  const debouncedQuery = useDebounce(query, 250);
-
-  return useQuery({
-    queryKey: nutritionKeys.autocomplete(debouncedQuery),
-    queryFn:  () => nutritionApi.autocomplete(debouncedQuery),
-    enabled:  debouncedQuery.trim().length > 0,
     staleTime: STALE_TIME_MS,
   });
 }

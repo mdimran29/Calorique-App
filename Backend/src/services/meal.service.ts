@@ -103,10 +103,49 @@ export const mealService = {
     return mealDoc;
   },
 
+  async getMealById(mealId: string) {
+    const meal = await mealRepository.findById(mealId);
+    if (!meal) throw ApiError.notFound('Meal not found');
+    return meal;
+  },
+
   async deleteMeal(userId: string, mealId: string) {
     const mealDoc = await mealRepository.findById(mealId);
     if (!mealDoc) throw ApiError.notFound('Meal not found');
     if (mealDoc.userId.toString() !== userId) throw ApiError.forbidden();
     await mealRepository.deleteById(mealId);
+  },
+
+  async getDailySummary(userId: string, date: string) {
+    const meal = await mealRepository.findByUserAndDate(userId, date);
+    if (meal) return meal;
+    return {
+      userId,
+      date,
+      meals: [],
+      dailyTotals: { calories: 0, protein: 0, carbs: 0, fats: 0 },
+      waterGlasses: 0,
+    };
+  },
+
+  async logWater(userId: string, date: string, glasses: number) {
+    const meal = await mealRepository.setWaterGlasses(userId, date, glasses);
+    await progressRepository.pushWaterEntry(new Types.ObjectId(userId), {
+      date,
+      liters: Math.round(glasses * 0.25 * 100) / 100,
+    });
+    return { date, glasses: meal.waterGlasses };
+  },
+
+  async getMealHistory(userId: string, query: { startDate?: string; endDate?: string; page?: number; pageSize?: number }) {
+    const { startDate, endDate, page = 1, pageSize = 14 } = query;
+
+    if (startDate && endDate) {
+      const meals = await mealRepository.findByDateRange(userId, startDate, endDate);
+      return { items: meals, total: meals.length, page: 1, pages: 1 };
+    }
+
+    const { meals, total } = await mealRepository.findByUserId(userId, page, pageSize);
+    return { items: meals, total, page, pages: Math.ceil(total / pageSize) };
   },
 };

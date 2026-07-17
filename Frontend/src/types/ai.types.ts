@@ -1,14 +1,19 @@
 // types/ai.types.ts — DietPlan, MealSuggestion interfaces
 
 export type DietBudget = 'basic' | 'standard' | 'premium';
-export type DietType = 'veg' | 'non_veg' | 'eggetarian' | 'vegan';
-export type FitnessGoal = 'muscle_gain' | 'fat_loss' | 'lean_bulk' | 'maintenance';
+// Free-text now — covers the fixed presets (veg, non_veg, ...) as well as custom entries (e.g. "Jain", "Keto")
+export type DietType = string;
+export type FitnessGoal = string;
 
 export interface GenerateDietPayload {
   fitnessGoal: FitnessGoal;
   dietType: DietType;
-  budget: DietBudget;
+  budget?: DietBudget;
+  /** Real daily food budget in rupees — takes priority over `budget` tier when set */
+  budgetAmountInr?: number;
   allergies: string[];
+  /** Free-text notes for anything not covered by the fixed fields */
+  notes?: string;
   dailyCalorieTarget?: number;
   durationDays?: number;     // default 7
   cuisinePreference?: string; // e.g., 'indian'
@@ -68,9 +73,19 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export interface ChatFoodSuggestion {
+  name: string;
+  quantity: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+}
+
 export interface ChatResponse {
   message: ChatMessage;
   suggestions?: string[];    // Quick reply chips
+  foodSuggestions?: ChatFoodSuggestion[]; // Specific foods Aria recommended — can be logged directly
 }
 
 export interface SendMessagePayload {

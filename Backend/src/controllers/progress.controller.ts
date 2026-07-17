@@ -8,15 +8,47 @@ import { asyncHandler } from '../utils/asyncHandler';
 export const progressController = {
   getProgress: asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
-    const progress = await progressService.getProgress(userId);
-    sendSuccess(res, { progress });
+    const { startDate, endDate } = req.query as Record<string, string>;
+    const progress = await progressService.getProgress(userId, startDate, endDate);
+    sendSuccess(res, progress as any);
   }),
 
   logWeight: asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
-    const { weight } = req.body;
-    const progress = await progressService.logWeight(userId, weight);
-    sendSuccess(res, { progress }, 'Weight logged successfully', 201);
+    const { weightKg, date, notes } = req.body;
+    const entry = await progressService.logWeight(userId, weightKg, date, notes);
+    sendSuccess(res, entry as any, 'Weight logged successfully', 201);
+  }),
+
+  getWeightHistory: asyncHandler(async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const { page, pageSize } = req.query as Record<string, string>;
+    const result = await progressService.getWeightHistory(
+      userId,
+      page ? Number(page) : 1,
+      pageSize ? Number(pageSize) : 90
+    );
+    const pages = Math.ceil(result.total / result.pageSize) || 1;
+    sendSuccess(
+      res,
+      result.items as any,
+      'Weight history retrieved',
+      200,
+      { page: result.page, limit: result.pageSize, total: result.total, pages, hasNext: result.page < pages, hasPrev: result.page > 1 }
+    );
+  }),
+
+  deleteWeightEntry: asyncHandler(async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    await progressService.deleteWeightEntry(userId, req.params.id);
+    sendSuccess(res, null, 'Weight entry deleted');
+  }),
+
+  getCalorieHistory: asyncHandler(async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const days = req.query.days ? Number(req.query.days) : 30;
+    const history = await progressService.getCalorieHistory(userId, days);
+    sendSuccess(res, history as any);
   }),
 
   logWater: asyncHandler(async (req: Request, res: Response) => {
@@ -43,7 +75,7 @@ export const progressController = {
   getFoodDetails: asyncHandler(async (req: Request, res: Response) => {
     const { id } = req.params;
     const { amount, unit } = req.query as Record<string, string>;
-    const food = await nutritionService.getFoodDetails(Number(id), amount ? Number(amount) : 100, unit ?? 'grams');
+    const food = await nutritionService.getFoodDetails(id, amount ? Number(amount) : 100, unit ?? 'grams');
     sendSuccess(res, { food });
   }),
 

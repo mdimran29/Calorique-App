@@ -14,17 +14,16 @@ router.use(authenticate);
 router.post(
   '/generate-diet',
   [
-    // New frontend format (preferred)
-    body('fitnessGoal')
-      .optional()
-      .isIn(['muscle_gain', 'fat_loss', 'lean_bulk', 'maintenance', 'Muscle Gain', 'Fat Loss', 'Lean Bulk', 'Maintenance']),
-    body('dietType')
-      .optional()
-      .isIn(['veg', 'non_veg', 'eggetarian', 'vegan', 'Veg', 'Non-Veg', 'Eggetarian']),
+    // Free-text now allowed here too — custom goals/diets flow through as a plain string
+    // and get folded into the prompt as-is, alongside the structured `notes` field below.
+    body('fitnessGoal').optional().isString().trim().isLength({ max: 60 }),
+    body('dietType').optional().isString().trim().isLength({ max: 60 }),
     body('budget')
       .optional()
       .isIn(['basic', 'standard', 'premium', 'Basic', 'Standard', 'Premium', 'low', 'medium', 'high']),
+    body('budgetAmountInr').optional().isFloat({ min: 50, max: 5000 }).withMessage('Budget must be between ₹50-₹5000/day'),
     body('allergies').optional().isArray(),
+    body('notes').optional().isString().trim().isLength({ max: 500 }),
     body('durationDays').optional().isInt({ min: 1, max: 30 }),
     // Legacy fields still accepted
     body('age').optional().isInt({ min: 13, max: 120 }),

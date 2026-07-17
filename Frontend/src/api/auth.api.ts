@@ -11,8 +11,8 @@ export interface LoginPayload {
 }
 
 export interface RegisterPayload {
-  displayName: string;
-  email: string;
+  displayName?: string;
+  email?: string;
   password?: string;
   firebaseToken?: string;
 }
@@ -50,12 +50,6 @@ export const authApi = {
         refreshToken,
       })
       .then((r) => r.data),
-
-  /**
-   * Sign in with Google (returns redirect URL or token)
-   */
-  googleSignIn: () =>
-    apiClient.get<ApiResponse<{ redirectUrl: string }>>('/auth/google').then((r) => r.data),
 
   /**
    * Request password reset email

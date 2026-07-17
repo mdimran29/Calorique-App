@@ -14,10 +14,10 @@ const FIREBASE_SIGNUP_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:
 
 export interface RegisterPayload {
   // Classic email/password registration
-  email: string;
-  name: string;
+  email?: string;
+  name?: string;
   password?: string;
-  // OR Firebase token (from Firebase client SDK)
+  // OR Firebase token (from Firebase client SDK) — covers Google Sign-In and Phone OTP
   firebaseToken?: string;
   age?: number;
   gender?: string;
@@ -28,6 +28,28 @@ export interface RegisterPayload {
   foodPreference?: string;
   allergies?: string[];
   displayName?: string; // alias for name
+}
+
+type DecodedFirebaseUser = {
+  uid: string;
+  email?: string;
+  phone_number?: string;
+  name?: string;
+  picture?: string;
+  firebase?: { sign_in_provider?: string };
+};
+
+function inferAuthProvider(decoded: DecodedFirebaseUser): 'google' | 'phone' | 'password' {
+  const provider = decoded.firebase?.sign_in_provider ?? '';
+  if (provider.includes('google')) return 'google';
+  if (provider.includes('phone')) return 'phone';
+  return 'password';
+}
+
+/** Phone-only Firebase accounts have no email — synthesize a stable placeholder so the
+ *  required/unique `email` field on User is always satisfiable without weakening the schema. */
+function placeholderEmail(uid: string): string {
+  return `${uid}@phone.calorique.app`;
 }
 
 export const authService = {
@@ -44,15 +66,17 @@ export const authService = {
    * Sign up via Firebase REST API (email + password), then create local user
    */
   async register(payload: RegisterPayload) {
-    const name = payload.name ?? payload.displayName ?? 'User';
-    const email = payload.email.toLowerCase();
-
-    let decodedToken: { uid: string; email?: string };
+    let decodedToken: DecodedFirebaseUser;
+    let authProvider: 'password' | 'google' | 'phone' = 'password';
 
     if (payload.firebaseToken) {
-      // Client-side Firebase SDK flow (mobile / React Native)
+      // Client-side Firebase SDK flow — covers Google Sign-In and Phone OTP,
+      // as well as mobile email/password. Identity comes from the verified token itself.
       decodedToken = await authService.verifyFirebaseToken(payload.firebaseToken);
+      authProvider = inferAuthProvider(decodedToken);
     } else if (payload.password) {
+      if (!payload.email) throw ApiError.badRequest('Email is required for password registration');
+      const email = payload.email.toLowerCase();
       // Web flow — create user in Firebase via REST API
       const apiKey = process.env.FIREBASE_WEB_API_KEY ?? FIREBASE_API_KEY();
       if (!apiKey) {
@@ -64,17 +88,17 @@ export const authService = {
           password: payload.password,
           returnSecureToken: true,
         });
-        const { localId, idToken } = res.data;
+        const { localId } = res.data;
         // Update display name in Firebase
         try {
           const admin = getFirebaseAdmin();
-          await admin.auth().updateUser(localId, { displayName: name });
+          await admin.auth().updateUser(localId, { displayName: payload.name ?? payload.displayName ?? 'User' });
         } catch { /* non-critical */ }
-        decodedToken = { uid: localId };
+        decodedToken = { uid: localId, email };
       } catch (err: any) {
         if (process.env.NODE_ENV !== 'production') {
           logger.warn('Firebase signup failed, using local mock UID for development');
-          decodedToken = { uid: `mock-uid-${email}` };
+          decodedToken = { uid: `mock-uid-${email}`, email };
         } else {
           const msg = err?.response?.data?.error?.message ?? 'Registration failed';
           if (msg.includes('EMAIL_EXISTS')) throw ApiError.conflict('Email already registered');
@@ -86,8 +110,14 @@ export const authService = {
       throw ApiError.badRequest('Either password or firebaseToken is required');
     }
 
-    // Check if already registered locally
-    const existing = await userRepository.findByEmail(email);
+    const name = payload.name ?? payload.displayName ?? decodedToken.name
+      ?? (decodedToken.email ? decodedToken.email.split('@')[0] : null)
+      ?? (decodedToken.phone_number ?? 'User');
+    const email = (payload.email ?? decodedToken.email ?? placeholderEmail(decodedToken.uid)).toLowerCase();
+
+    // Check if already registered locally (by Firebase UID first — the durable identity)
+    const existing = await userRepository.findByFirebaseUid(decodedToken.uid)
+      ?? (decodedToken.email ? await userRepository.findByEmail(email) : null);
     if (existing) {
       // User already exists — return tokens (idempotent register)
       const tokens = await authService.generateTokenPair(existing);
@@ -98,6 +128,9 @@ export const authService = {
       firebaseUid:    decodedToken.uid,
       name,
       email,
+      phoneNumber:    decodedToken.phone_number,
+      authProvider,
+      avatar:         decodedToken.picture,
       age:            payload.age,
       gender:         payload.gender as IUser['gender'],
       height:         payload.height,
@@ -115,12 +148,14 @@ export const authService = {
 
   /**
    * Login — accepts either email/password or a Firebase ID token
+   * (ID tokens cover Google Sign-In, Phone OTP, and mobile email/password alike)
    */
   async login(payload: { firebaseToken?: string; email?: string; password?: string }) {
     let uid: string;
+    let decoded: DecodedFirebaseUser | null = null;
 
     if (payload.firebaseToken) {
-      const decoded = await authService.verifyFirebaseToken(payload.firebaseToken);
+      decoded = await authService.verifyFirebaseToken(payload.firebaseToken);
       uid = decoded.uid;
     } else if (payload.email && payload.password) {
       const apiKey = process.env.FIREBASE_WEB_API_KEY ?? FIREBASE_API_KEY();
@@ -156,13 +191,23 @@ export const authService = {
 
     let user = await userRepository.findByFirebaseUid(uid);
 
-    // Auto-register if Firebase user exists but not in our DB
-    if (!user && payload.email) {
+    // Auto-register on first login — covers Google Sign-In and Phone OTP, where
+    // there's no separate "register" step; the Firebase token itself is proof of identity.
+    if (!user) {
+      const email = (payload.email ?? decoded?.email ?? placeholderEmail(uid))?.toLowerCase();
+      const name = decoded?.name
+        ?? (decoded?.email ? decoded.email.split('@')[0] : payload.email?.split('@')[0])
+        ?? decoded?.phone_number
+        ?? 'User';
+
       user = await userRepository.create({
-        firebaseUid: uid,
-        name:        payload.email.split('@')[0],
-        email:       payload.email.toLowerCase(),
-        allergies:   [],
+        firebaseUid:  uid,
+        name,
+        email,
+        phoneNumber:  decoded?.phone_number,
+        authProvider: decoded ? inferAuthProvider(decoded) : 'password',
+        avatar:       decoded?.picture,
+        allergies:    [],
         profileComplete: false,
       });
     }

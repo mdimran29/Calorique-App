@@ -13,11 +13,12 @@ export interface GetMealsParams extends DateRangeParams {
 
 export const mealsApi = {
   /**
-   * Get meals — can filter by date, date range, or meal type
+   * Get meals — can filter by date, date range, or meal type.
+   * Backend returns one DailyMealSummary doc per matched date.
    */
   getMeals: (params?: GetMealsParams) =>
     apiClient
-      .get<ApiResponse<Meal[]>>('/meals', { params })
+      .get<ApiResponse<{ meals: DailyMealSummary[] }>>('/meals', { params })
       .then((r) => r.data),
 
   /**
@@ -31,14 +32,16 @@ export const mealsApi = {
    */
   getDailySummary: (date: string) =>
     apiClient
-      .get<ApiResponse<DailyMealSummary>>(`/meals/summary/${date}`)
-      .then((r) => r.data),
+      .get<ApiResponse<{ summary: DailyMealSummary }>>(`/meals/summary/${date}`)
+      .then((r) => ({ ...r.data, data: r.data.data.summary })),
 
   /**
    * Get a single meal by ID
    */
   getMealById: (id: string) =>
-    apiClient.get<ApiResponse<Meal>>(`/meals/${id}`).then((r) => r.data),
+    apiClient
+      .get<ApiResponse<{ meal: Meal }>>(`/meals/${id}`)
+      .then((r) => ({ ...r.data, data: r.data.data.meal })),
 
   /**
    * Create a new meal entry
@@ -71,6 +74,21 @@ export const mealsApi = {
    */
   getMealHistory: (params?: DateRangeParams & { page?: number; pageSize?: number }) =>
     apiClient
-      .get<PaginatedResponse<DailyMealSummary>>('/meals/history', { params })
-      .then((r) => r.data),
+      .get<
+        ApiResponse<{ items: DailyMealSummary[] }> & {
+          pagination: { page: number; limit: number; total: number; pages: number; hasNext: boolean; hasPrev: boolean };
+        }
+      >('/meals/history', { params })
+      .then((r) => ({
+        success: r.data.success,
+        data: r.data.data.items,
+        pagination: {
+          page: r.data.pagination.page,
+          pageSize: r.data.pagination.limit,
+          total: r.data.pagination.total,
+          totalPages: r.data.pagination.pages,
+          hasNextPage: r.data.pagination.hasNext,
+          hasPrevPage: r.data.pagination.hasPrev,
+        } satisfies PaginatedResponse<unknown>['pagination'],
+      })),
 };

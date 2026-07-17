@@ -9,13 +9,25 @@ export const goalsApi = {
    * Get the current user's active nutrition goal
    */
   getGoals: () =>
-    apiClient.get<ApiResponse<NutritionGoal>>('/goals').then((r) => r.data),
+    apiClient
+      .get<ApiResponse<{ goals: NutritionGoal }>>('/goals')
+      .then((r) => ({ ...r.data, data: r.data.data.goals })),
 
   /**
    * Create or update the user's nutrition goals
    */
   setGoals: (payload: SetGoalPayload) =>
-    apiClient.put<ApiResponse<NutritionGoal>>('/goals', payload).then((r) => r.data),
+    apiClient
+      .put<ApiResponse<{ goals: NutritionGoal }>>('/goals', payload)
+      .then((r) => ({ ...r.data, data: r.data.data.goals })),
+
+  /**
+   * Auto-calculate goals from the user's profile (BMR/TDEE based)
+   */
+  autoCalculateGoals: () =>
+    apiClient
+      .post<ApiResponse<{ goals: NutritionGoal }>>('/goals/auto-calculate')
+      .then((r) => ({ ...r.data, data: r.data.data.goals })),
 
   /**
    * Get goal progress for a specific date

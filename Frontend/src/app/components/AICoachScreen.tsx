@@ -1,13 +1,23 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Send, Sparkles, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
-import { useGenerateDiet, useSendChatMessage } from "../../hooks/useAI";
+import { Send, Sparkles, RefreshCw, ChevronDown, ChevronUp, Plus, Check, IndianRupee } from "lucide-react";
+import { useGenerateDiet, useSendChatMessage, useChatHistory } from "../../hooks/useAI";
+import { useCreateMeal, useDailySummary } from "../../hooks/useMeals";
+import { useGoals } from "../../hooks/useGoals";
+import { useAuth } from "../../hooks/useAuth";
+import { today } from "../../utils/dateUtils";
+import { renderMarkdown } from "../../utils/miniMarkdown";
+import type { ChatFoodSuggestion } from "../../types/ai.types";
 
-type Goal = "Muscle Gain" | "Fat Loss" | "Lean Bulk" | "Maintenance";
 type Budget = "Basic" | "Standard" | "Premium";
-type DietType = "Veg" | "Non-Veg" | "Eggetarian";
 
-interface Message { id: number; role: "user" | "bot"; text: string; time: string; }
+interface Message {
+  id: string;
+  role: "user" | "bot";
+  text: string;
+  time: string;
+  foodSuggestions?: ChatFoodSuggestion[];
+}
 
 const gc = {
   background: "rgba(28,28,30,0.75)", backdropFilter: "blur(20px)",
@@ -18,61 +28,148 @@ const WEEK_DAYS = ["Monday","Tuesday","Wednesday"]; // 3-day plan for speed
 const MEAL_ICONS: Record<string,string> = { breakfast:"☀️", lunch:"🍛", dinner:"🌙", snack:"🥜" };
 const MEAL_COLORS: Record<string,string> = { breakfast:"#FF9800", lunch:"#4CAF50", dinner:"#9C27B0", snack:"#2196F3" };
 
-const GOALS: Goal[] = ["Muscle Gain","Fat Loss","Lean Bulk","Maintenance"];
-const GOAL_ICONS: Record<Goal,string> = {"Muscle Gain":"💪","Fat Loss":"🔥","Lean Bulk":"⚡","Maintenance":"⚖️"};
-const BUDGET_OPTS = [
-  { label:"Basic", icon:"🪙", desc:"Budget-friendly" },
-  { label:"Standard", icon:"💰", desc:"Balanced" },
-  { label:"Premium", icon:"💎", desc:"Organic+" },
-];
-const DIET_TYPES: DietType[] = ["Veg","Non-Veg","Eggetarian"];
-const DIET_ICONS: Record<DietType,string> = { Veg:"🥦","Non-Veg":"🍗", Eggetarian:"🥚" };
+const GOALS = ["Muscle Gain","Fat Loss","Lean Bulk","Maintenance"] as const;
+const GOAL_ICONS: Record<string,string> = {"Muscle Gain":"💪","Fat Loss":"🔥","Lean Bulk":"⚡","Maintenance":"⚖️"};
+const DIET_TYPES = ["Veg","Non-Veg","Eggetarian"] as const;
+const DIET_ICONS: Record<string,string> = { Veg:"🥦","Non-Veg":"🍗", Eggetarian:"🥚" };
 const ALLERGY_TAGS = ["Lactose","Gluten","Nuts","Soy","Shellfish"];
 const CHIPS = ["Suggest high-protein snacks","What should I eat pre-workout?","How to reduce belly fat?"];
 
+const BUDGET_MIN = 100;
+const BUDGET_MAX = 1000;
+const BUDGET_PRESETS: { label: Budget; amount: number; desc: string }[] = [
+  { label: "Basic", amount: 150, desc: "Budget-friendly" },
+  { label: "Standard", amount: 350, desc: "Balanced" },
+  { label: "Premium", amount: 700, desc: "Organic+" },
+];
+
 const getTime = () => new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});
 
-// Map display labels → API values
-const GOAL_MAP: Record<Goal, string> = {
-  "Muscle Gain": "muscle_gain",
-  "Fat Loss":    "fat_loss",
-  "Lean Bulk":   "lean_bulk",
-  "Maintenance": "maintenance",
+// Map display labels → API values (still used for the fixed presets; custom text passes through as-is)
+const GOAL_MAP: Record<string, string> = {
+  "Muscle Gain": "muscle_gain", "Fat Loss": "fat_loss", "Lean Bulk": "lean_bulk", "Maintenance": "maintenance",
 };
-const DIET_MAP: Record<DietType, string> = {
-  "Veg":        "veg",
-  "Non-Veg":    "non_veg",
-  "Eggetarian": "eggetarian",
-};
-const BUDGET_MAP: Record<Budget, string> = {
-  "Basic":    "basic",
-  "Standard": "standard",
-  "Premium":  "premium",
+const DIET_MAP: Record<string, string> = {
+  "Veg": "veg", "Non-Veg": "non_veg", "Eggetarian": "eggetarian",
 };
 
+function EditableChipRow({
+  label, options, icons, selected, onSelect, color = "#4CAF50",
+}: {
+  label: string;
+  options: readonly string[];
+  icons?: Record<string, string>;
+  selected: string;
+  onSelect: (v: string) => void;
+  color?: string;
+}) {
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customValue, setCustomValue] = useState("");
+  const isCustomSelected = !options.includes(selected as any) && selected !== "";
+
+  return (
+    <div style={{ ...gc, marginBottom: "10px" }}>
+      <p style={{ color: "#777", fontSize: "10px", fontWeight: 700, margin: "0 0 10px", letterSpacing: "0.7px" }}>{label}</p>
+      <div style={{ display: "flex", gap: "7px", flexWrap: "wrap" }}>
+        {options.map((opt) => (
+          <motion.button key={opt} whileTap={{ scale: 0.95 }} onClick={() => { onSelect(opt); setCustomOpen(false); }} style={{
+            background: selected === opt ? `${color}29` : "rgba(255,255,255,0.04)",
+            border: selected === opt ? `1px solid ${color}99` : "1px solid rgba(255,255,255,0.06)",
+            borderRadius: "11px", padding: "9px 12px", cursor: "pointer",
+            color: selected === opt ? color : "#888", fontSize: "11px", fontWeight: selected === opt ? 700 : 400, transition: "all 0.2s",
+          }}>{icons?.[opt] ?? ""} {opt}</motion.button>
+        ))}
+        <motion.button whileTap={{ scale: 0.95 }} onClick={() => setCustomOpen((v) => !v)} style={{
+          background: isCustomSelected ? `${color}29` : "rgba(255,255,255,0.04)",
+          border: isCustomSelected ? `1px solid ${color}99` : "1px dashed rgba(255,255,255,0.15)",
+          borderRadius: "11px", padding: "9px 12px", cursor: "pointer",
+          color: isCustomSelected ? color : "#666", fontSize: "11px", fontWeight: isCustomSelected ? 700 : 400, transition: "all 0.2s",
+        }}>✏️ {isCustomSelected ? selected : "Other"}</motion.button>
+      </div>
+      <AnimatePresence>
+        {customOpen && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ overflow: "hidden" }}>
+            <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+              <input
+                value={customValue}
+                onChange={(e) => setCustomValue(e.target.value)}
+                placeholder={`Type your own ${label.toLowerCase()}...`}
+                style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", padding: "8px 10px", color: "#fff", fontSize: "12px", outline: "none" }}
+              />
+              <motion.button whileTap={{ scale: 0.95 }} onClick={() => { if (customValue.trim()) { onSelect(customValue.trim()); setCustomOpen(false); } }}
+                style={{ background: color, border: "none", borderRadius: "8px", padding: "8px 14px", color: "#fff", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
+                Use
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function AICoachScreen() {
+  const { user } = useAuth();
   const [segment, setSegment] = useState<"generate"|"chat">("generate");
-  const [goal, setGoal] = useState<Goal>("Muscle Gain");
-  const [budget, setBudget] = useState<Budget>("Standard");
-  const [dietType, setDietType] = useState<DietType>("Veg");
+  const [goal, setGoal] = useState<string>("Muscle Gain");
+  const [budgetAmount, setBudgetAmount] = useState(350);
+  const [dietType, setDietType] = useState<string>("Veg");
   const [allergies, setAllergies] = useState<string[]>([]);
+  const [customAllergy, setCustomAllergy] = useState("");
+  const [notes, setNotes] = useState("");
   const [showPlan, setShowPlan] = useState(false);
   const [planData, setPlanData] = useState<any>(null);
   const [selectedDay, setSelectedDay] = useState("Monday");
   const [expandedMeal, setExpandedMeal] = useState<string|null>(null);
 
-  const [messages, setMessages] = useState<Message[]>([{
-    id:1, role:"bot",
-    text:"Hi! 👋 I'm Aria, your AI Dietitian powered by Gemini. I can help you plan meals, track macros, and give personalised nutrition advice. What can I help you with today?",
-    time:"9:41 AM",
-  }]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>(CHIPS);
+  const [loggedKeys, setLoggedKeys] = useState<Set<string>>(new Set());
   const msgRef = useRef<HTMLDivElement>(null);
 
   const generateDiet = useGenerateDiet();
   const sendChat    = useSendChatMessage();
+  const createMeal  = useCreateMeal();
+  const { data: chatHistoryRes } = useChatHistory();
+  const { data: summaryRes } = useDailySummary(today());
+  const { data: goalsRes } = useGoals();
+
+  // ── Load persisted chat history once, then generate a proactive, data-aware greeting ──
+  useEffect(() => {
+    if (historyLoaded) return;
+    if (chatHistoryRes === undefined) return; // still loading
+
+    const history = (chatHistoryRes.data ?? []).map((m: any) => ({
+      id: m.id, role: m.role === "user" ? "user" as const : "bot" as const,
+      text: m.content, time: new Date(m.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+    }));
+
+    if (history.length > 0) {
+      setMessages(history);
+    } else {
+      const eaten = summaryRes?.data?.dailyTotals;
+      const goals = goalsRes?.data;
+      let greeting = `Hi${user?.name ? " " + user.name.split(" ")[0] : ""}! 👋 I'm Aria, your AI Dietitian powered by Gemini. I can help you plan meals, track macros, and give personalised nutrition advice. What can I help you with today?`;
+
+      if (eaten && goals) {
+        const remainingCal = Math.max(0, Math.round(goals.targetCalories - eaten.calories));
+        const remainingProtein = Math.max(0, Math.round(goals.targetProtein - eaten.protein));
+        if (eaten.calories === 0) {
+          greeting = `Good to see you${user?.name ? ", " + user.name.split(" ")[0] : ""}! 👋 You haven't logged anything today yet — your target is **${goals.targetCalories} kcal**. Want a breakfast idea to get started?`;
+        } else if (remainingCal > 0) {
+          greeting = `Hey${user?.name ? " " + user.name.split(" ")[0] : ""}! 👋 You're at **${Math.round(eaten.calories)} / ${goals.targetCalories} kcal** today, with **${remainingProtein}g protein** left to hit your goal. Want a suggestion for your next meal?`;
+        } else {
+          greeting = `Nice work${user?.name ? ", " + user.name.split(" ")[0] : ""}! 🎉 You've hit your **${goals.targetCalories} kcal** target for today. Anything else I can help with — tomorrow's plan, a recipe, or workout nutrition tips?`;
+        }
+      }
+
+      setMessages([{ id: "welcome", role: "bot", text: greeting, time: getTime() }]);
+    }
+    setHistoryLoaded(true);
+  }, [chatHistoryRes, historyLoaded, summaryRes, goalsRes, user]);
 
   useEffect(() => {
     if (msgRef.current) msgRef.current.scrollTop = msgRef.current.scrollHeight;
@@ -81,16 +178,22 @@ export default function AICoachScreen() {
   const toggleAllergy = (a: string) =>
     setAllergies(p => p.includes(a) ? p.filter(x=>x!==a) : [...p,a]);
 
+  const addCustomAllergy = () => {
+    const v = customAllergy.trim();
+    if (v && !allergies.includes(v)) setAllergies(p => [...p, v]);
+    setCustomAllergy("");
+  };
+
   const handleGenerate = async () => {
     try {
       const res = await generateDiet.mutateAsync({
-        fitnessGoal: GOAL_MAP[goal] as any,
-        dietType:    DIET_MAP[dietType] as any,
-        budget:      BUDGET_MAP[budget] as any,
+        fitnessGoal: GOAL_MAP[goal] ?? goal,
+        dietType:    DIET_MAP[dietType] ?? dietType,
+        budgetAmountInr: budgetAmount,
         allergies,
+        notes: notes.trim() || undefined,
         durationDays: 3,
       });
-      // Backend returns: { success, data: { plan, dietPlanId } }
       const plan = (res as any)?.plan ?? (res as any)?.data?.plan;
       if (plan) {
         setPlanData(plan);
@@ -106,7 +209,7 @@ export default function AICoachScreen() {
   };
 
   const sendMessage = async (text: string) => {
-    const userMsg: Message = { id: Date.now(), role:"user", text, time: getTime() };
+    const userMsg: Message = { id: `u-${Date.now()}`, role:"user", text, time: getTime() };
     setMessages(p => [...p, userMsg]);
     setInput(""); setIsTyping(true);
     try {
@@ -114,15 +217,38 @@ export default function AICoachScreen() {
       const data = (res as any)?.data ?? res;
       const reply = data?.message?.content ?? data?.reply ?? "I couldn't generate a response right now. Please try again.";
       const newSuggestions = data?.suggestions;
+      const foodSuggestions = data?.foodSuggestions;
       if (newSuggestions?.length) setSuggestions(newSuggestions);
-      setMessages(p => [...p, { id: Date.now()+1, role:"bot", text: reply, time: getTime() }]);
+      setMessages(p => [...p, { id: `b-${Date.now()}`, role:"bot", text: reply, time: getTime(), foodSuggestions }]);
     } catch {
-      setMessages(p => [...p, { id: Date.now()+1, role:"bot", text: "⚠️ Aria is temporarily offline. Please try again in a moment.", time: getTime() }]);
+      setMessages(p => [...p, { id: `b-${Date.now()}`, role:"bot", text: "⚠️ Aria is temporarily offline. Please try again in a moment.", time: getTime() }]);
     } finally { setIsTyping(false); }
+  };
+
+  const logSuggestedFood = (msgId: string, food: ChatFoodSuggestion, idx: number) => {
+    const key = `${msgId}-${idx}`;
+    createMeal.mutate({
+      date: today(),
+      type: "snack",
+      foods: [{
+        name: food.name,
+        quantity: 1,
+        unit: food.quantity,
+        calories: food.calories,
+        protein: food.protein,
+        carbs: food.carbs,
+        fats: food.fats,
+      }],
+    }, {
+      onSuccess: () => setLoggedKeys(prev => new Set(prev).add(key)),
+      onError: () => alert("Couldn't log this food. Please try adding it from the Meals tab."),
+    });
   };
 
   const dayData = planData?.days?.find((d:any) => d.day === selectedDay);
   const dayMeals: any[] = dayData?.meals ?? [];
+  const hasCosts = dayMeals.some((m: any) => typeof m.estimatedCost === "number");
+  const dayCost = dayMeals.reduce((s: number, m: any) => s + (m.estimatedCost ?? 0), 0);
 
   return (
     <div style={{height:"100%",display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -151,54 +277,47 @@ export default function AICoachScreen() {
 
             {!showPlan ? (
               <div>
-                {/* Fitness Goal */}
-                <div style={{...gc,marginBottom:"10px"}}>
-                  <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:"0 0 10px",letterSpacing:"0.7px"}}>FITNESS GOAL</p>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"7px"}}>
-                    {GOALS.map(g=>(
-                      <motion.button key={g} whileTap={{scale:0.95}} onClick={()=>setGoal(g)} style={{
-                        background:goal===g?"rgba(76,175,80,0.16)":"rgba(255,255,255,0.04)",
-                        border:goal===g?"1px solid rgba(76,175,80,0.6)":"1px solid rgba(255,255,255,0.06)",
-                        borderRadius:"11px",padding:"10px 6px",cursor:"pointer",
-                        color:goal===g?"#4CAF50":"#888",fontSize:"11px",fontWeight:goal===g?700:400,transition:"all 0.2s",
-                      }}>{GOAL_ICONS[g]} {g}</motion.button>
-                    ))}
-                  </div>
-                </div>
+                <EditableChipRow label="FITNESS GOAL" options={GOALS} icons={GOAL_ICONS} selected={goal} onSelect={setGoal} />
 
-                {/* Budget */}
+                {/* Budget — real ₹/day amount */}
                 <div style={{...gc,marginBottom:"10px"}}>
-                  <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:"0 0 10px",letterSpacing:"0.7px"}}>DIET BUDGET</p>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                    <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:0,letterSpacing:"0.7px"}}>DAILY FOOD BUDGET</p>
+                    <div style={{display:"flex",alignItems:"center",gap:"3px",color:"#4CAF50",fontWeight:800,fontSize:"16px"}}>
+                      <IndianRupee size={14} strokeWidth={2.5} />{budgetAmount}
+                      <span style={{color:"#555",fontSize:"10px",fontWeight:400,marginLeft:"2px"}}>/day</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range" min={BUDGET_MIN} max={BUDGET_MAX} step={10}
+                    value={budgetAmount}
+                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
+                    style={{ width: "100%", accentColor: "#4CAF50", marginBottom: "6px", cursor: "pointer" }}
+                  />
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:"10px"}}>
+                    <span style={{color:"#444",fontSize:"9px"}}>₹{BUDGET_MIN}</span>
+                    <span style={{color:"#444",fontSize:"9px"}}>₹{BUDGET_MAX}+</span>
+                  </div>
                   <div style={{display:"flex",gap:"7px"}}>
-                    {BUDGET_OPTS.map(({label,icon,desc})=>(
-                      <motion.button key={label} whileTap={{scale:0.95}} onClick={()=>setBudget(label as Budget)} style={{
-                        flex:1, background:budget===label?"rgba(76,175,80,0.12)":"rgba(255,255,255,0.04)",
-                        border:budget===label?"1px solid rgba(76,175,80,0.5)":"1px solid rgba(255,255,255,0.06)",
-                        borderRadius:"11px",padding:"10px 4px",cursor:"pointer",textAlign:"center",transition:"all 0.2s",
+                    {BUDGET_PRESETS.map(({label,amount,desc})=>(
+                      <motion.button key={label} whileTap={{scale:0.95}} onClick={()=>setBudgetAmount(amount)} style={{
+                        flex:1, background: budgetAmount===amount ?"rgba(76,175,80,0.12)":"rgba(255,255,255,0.04)",
+                        border: budgetAmount===amount ?"1px solid rgba(76,175,80,0.5)":"1px solid rgba(255,255,255,0.06)",
+                        borderRadius:"11px",padding:"8px 4px",cursor:"pointer",textAlign:"center",transition:"all 0.2s",
                       }}>
-                        <span style={{fontSize:"17px",display:"block"}}>{icon}</span>
-                        <span style={{color:budget===label?"#4CAF50":"#888",fontSize:"11px",fontWeight:budget===label?700:400,display:"block"}}>{label}</span>
+                        <span style={{color: budgetAmount===amount ?"#4CAF50":"#888",fontSize:"11px",fontWeight:700,display:"block"}}>₹{amount}</span>
                         <span style={{color:"#444",fontSize:"9px",display:"block"}}>{desc}</span>
                       </motion.button>
                     ))}
                   </div>
                 </div>
 
-                {/* Diet Type + Allergies */}
-                <div style={{...gc,marginBottom:"12px"}}>
-                  <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:"0 0 10px",letterSpacing:"0.7px"}}>DIET TYPE</p>
-                  <div style={{display:"flex",gap:"7px",marginBottom:"14px"}}>
-                    {DIET_TYPES.map(d=>(
-                      <motion.button key={d} whileTap={{scale:0.95}} onClick={()=>setDietType(d)} style={{
-                        flex:1, background:dietType===d?"rgba(76,175,80,0.12)":"rgba(255,255,255,0.04)",
-                        border:dietType===d?"1px solid rgba(76,175,80,0.5)":"1px solid rgba(255,255,255,0.06)",
-                        borderRadius:"11px",padding:"9px 4px",cursor:"pointer",
-                        color:dietType===d?"#4CAF50":"#888",fontSize:"11px",fontWeight:dietType===d?700:400,transition:"all 0.2s",
-                      }}>{DIET_ICONS[d]} {d}</motion.button>
-                    ))}
-                  </div>
+                <EditableChipRow label="DIET TYPE" options={DIET_TYPES} icons={DIET_ICONS} selected={dietType} onSelect={setDietType} />
+
+                {/* Allergies + custom */}
+                <div style={{...gc,marginBottom:"10px"}}>
                   <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:"0 0 8px",letterSpacing:"0.7px"}}>ALLERGIES / AVOID</p>
-                  <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                  <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"10px"}}>
                     {ALLERGY_TAGS.map(a=>(
                       <motion.button key={a} whileTap={{scale:0.93}} onClick={()=>toggleAllergy(a)} style={{
                         background:allergies.includes(a)?"rgba(233,30,99,0.14)":"rgba(255,255,255,0.04)",
@@ -207,7 +326,38 @@ export default function AICoachScreen() {
                         color:allergies.includes(a)?"#E91E63":"#777",fontSize:"11px",transition:"all 0.2s",
                       }}>{allergies.includes(a)?"✕ ":""}{a}</motion.button>
                     ))}
+                    {allergies.filter(a => !ALLERGY_TAGS.includes(a)).map(a => (
+                      <motion.button key={a} whileTap={{scale:0.93}} onClick={()=>toggleAllergy(a)} style={{
+                        background:"rgba(233,30,99,0.14)", border:"1px solid rgba(233,30,99,0.5)",
+                        borderRadius:"20px",padding:"5px 12px",cursor:"pointer", color:"#E91E63",fontSize:"11px",
+                      }}>✕ {a}</motion.button>
+                    ))}
                   </div>
+                  <div style={{display:"flex",gap:"6px"}}>
+                    <input
+                      value={customAllergy}
+                      onChange={(e) => setCustomAllergy(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomAllergy())}
+                      placeholder="Something else to avoid? (e.g. mushrooms)"
+                      style={{ flex:1, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"8px", padding:"8px 10px", color:"#fff", fontSize:"12px", outline:"none" }}
+                    />
+                    <motion.button whileTap={{scale:0.95}} onClick={addCustomAllergy} style={{ background:"rgba(233,30,99,0.15)", border:"1px solid rgba(233,30,99,0.4)", borderRadius:"8px", padding:"8px 12px", cursor:"pointer", color:"#E91E63", display:"flex", alignItems:"center" }}>
+                      <Plus size={14} />
+                    </motion.button>
+                  </div>
+                </div>
+
+                {/* Notes — catch-all free text */}
+                <div style={{...gc,marginBottom:"12px"}}>
+                  <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:"0 0 8px",letterSpacing:"0.7px"}}>ANYTHING ELSE? (OPTIONAL)</p>
+                  <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value.slice(0, 500))}
+                    placeholder="e.g. Training for a marathon, prefer 2 big meals not 4 small ones, recovering from injury, PCOS-friendly..."
+                    rows={3}
+                    style={{ width:"100%", boxSizing:"border-box", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"10px", padding:"10px", color:"#fff", fontSize:"12px", outline:"none", resize:"vertical", fontFamily:"inherit" }}
+                  />
+                  <p style={{color:"#444",fontSize:"9px",margin:"4px 0 0",textAlign:"right"}}>{notes.length}/500</p>
                 </div>
 
                 {/* Generate Button */}
@@ -245,7 +395,7 @@ export default function AICoachScreen() {
               <div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
                   <div>
-                    <p style={{color:"#4CAF50",fontSize:"13px",fontWeight:700,margin:0}}>✅ {planData?.title ?? "Your 7-Day Plan"}</p>
+                    <p style={{color:"#4CAF50",fontSize:"13px",fontWeight:700,margin:0}}>✅ {planData?.title ?? "Your Plan"}</p>
                     <p style={{color:"#555",fontSize:"10px",margin:"2px 0 0"}}>
                       {planData?.dailyCalories} kcal/day · P:{planData?.macros?.protein}g · C:{planData?.macros?.carbs}g · F:{planData?.macros?.fats}g
                     </p>
@@ -267,6 +417,11 @@ export default function AICoachScreen() {
                       flexShrink:0,boxShadow:selectedDay===day?"0 2px 12px rgba(76,175,80,0.4)":"none",transition:"all 0.2s",
                     }}>{day.slice(0,3)}</motion.button>
                   ))}
+                  {hasCosts && (
+                    <div style={{ marginLeft:"auto", flexShrink:0, display:"flex", alignItems:"center", gap:"3px", background:"rgba(76,175,80,0.1)", border:"1px solid rgba(76,175,80,0.3)", borderRadius:"10px", padding:"6px 10px", color:"#4CAF50", fontSize:"11px", fontWeight:700 }}>
+                      <IndianRupee size={11} />{Math.round(dayCost)} today
+                    </div>
+                  )}
                 </div>
 
                 <AnimatePresence mode="wait">
@@ -288,7 +443,12 @@ export default function AICoachScreen() {
                               <span style={{fontSize:"16px"}}>{icon}</span>
                               <div>
                                 <p style={{color:"#e0e0e6",fontSize:"12px",fontWeight:700,margin:0,textTransform:"capitalize"}}>{meal.type}</p>
-                                <p style={{color:color,fontSize:"11px",fontWeight:600,margin:0}}>{meal.mealCalories} kcal</p>
+                                <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                                  <p style={{color:color,fontSize:"11px",fontWeight:600,margin:0}}>{meal.mealCalories} kcal</p>
+                                  {typeof meal.estimatedCost === "number" && (
+                                    <p style={{color:"#666",fontSize:"10px",margin:0}}>· ₹{meal.estimatedCost}</p>
+                                  )}
+                                </div>
                               </div>
                             </div>
                             <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
@@ -303,11 +463,9 @@ export default function AICoachScreen() {
                               {open ? <ChevronUp size={13} color="#555"/> : <ChevronDown size={13} color="#555"/>}
                             </div>
                           </div>
-                          {/* Meal name */}
                           <p style={{color:"#a0a0aa",fontSize:"12px",margin:"7px 0 0",lineHeight:1.5}}>
                             {meal.name ?? meal.foods?.map((f:any)=>f.name).join(", ")}
                           </p>
-                          {/* Expanded foods */}
                           <AnimatePresence>
                             {open && (
                               <motion.div initial={{height:0,opacity:0}} animate={{height:"auto",opacity:1}} exit={{height:0,opacity:0}}
@@ -330,7 +488,6 @@ export default function AICoachScreen() {
                       );
                     })}
 
-                    {/* Tips */}
                     {planData?.tips?.length > 0 && (
                       <div style={{...gc,marginTop:"6px"}}>
                         <p style={{color:"#777",fontSize:"10px",fontWeight:700,margin:"0 0 8px",letterSpacing:"0.7px"}}>💡 NUTRITION TIPS</p>
@@ -355,7 +512,7 @@ export default function AICoachScreen() {
                   {msg.role==="bot" && (
                     <div style={{width:"26px",height:"26px",borderRadius:"50%",background:"linear-gradient(135deg,#4CAF50,#2196F3)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"12px"}}>🤖</div>
                   )}
-                  <div style={{maxWidth:"76%"}}>
+                  <div style={{maxWidth:"80%"}}>
                     {msg.role==="bot" && <p style={{color:"#666",fontSize:"10px",margin:"0 0 3px 4px"}}>Aria · {msg.time}</p>}
                     <div style={{
                       background:msg.role==="user"?"linear-gradient(135deg,#4CAF50,#66BB6A)":"rgba(36,36,40,0.95)",
@@ -364,9 +521,42 @@ export default function AICoachScreen() {
                       padding:"10px 12px",
                       boxShadow:msg.role==="user"?"0 2px 12px rgba(76,175,80,0.2)":"none",
                     }}>
-                      <p style={{color:"#fff",fontSize:"12px",margin:0,lineHeight:1.65,whiteSpace:"pre-line"}}>{msg.text}</p>
+                      <div style={{color:"#fff",fontSize:"12px"}}>
+                        {msg.role === "bot" ? renderMarkdown(msg.text) : <p style={{margin:0,lineHeight:1.65,whiteSpace:"pre-line"}}>{msg.text}</p>}
+                      </div>
                     </div>
                     {msg.role==="user" && <p style={{color:"#555",fontSize:"10px",margin:"3px 4px 0",textAlign:"right"}}>{msg.time}</p>}
+
+                    {/* Quick-log cards for any foods Aria recommended in this reply */}
+                    {msg.foodSuggestions && msg.foodSuggestions.length > 0 && (
+                      <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                        {msg.foodSuggestions.map((food, i) => {
+                          const key = `${msg.id}-${i}`;
+                          const logged = loggedKeys.has(key);
+                          return (
+                            <div key={key} style={{ background: "rgba(76,175,80,0.06)", border: "1px solid rgba(76,175,80,0.2)", borderRadius: "12px", padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                              <div>
+                                <p style={{ color: "#e0e0e6", fontSize: "12px", fontWeight: 600, margin: 0 }}>{food.name} <span style={{color:"#666",fontWeight:400}}>({food.quantity})</span></p>
+                                <p style={{ color: "#666", fontSize: "10px", margin: "2px 0 0" }}>{food.calories} kcal · P:{food.protein}g C:{food.carbs}g F:{food.fats}g</p>
+                              </div>
+                              <motion.button
+                                whileTap={{ scale: 0.92 }}
+                                disabled={logged}
+                                onClick={() => logSuggestedFood(msg.id, food, i)}
+                                style={{
+                                  flexShrink: 0, display: "flex", alignItems: "center", gap: "4px",
+                                  background: logged ? "rgba(76,175,80,0.2)" : "#4CAF50",
+                                  border: "none", borderRadius: "8px", padding: "6px 10px",
+                                  color: "#fff", fontSize: "10px", fontWeight: 700, cursor: logged ? "default" : "pointer",
+                                }}
+                              >
+                                {logged ? <><Check size={11} /> Logged</> : <><Plus size={11} /> Log</>}
+                              </motion.button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

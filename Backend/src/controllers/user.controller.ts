@@ -17,6 +17,18 @@ export const userController = {
     sendSuccess(res, { user }, 'Profile updated successfully');
   }),
 
+  deleteAccount: asyncHandler(async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    await userService.deleteAccount(userId);
+    sendSuccess(res, null, 'Account deleted successfully');
+  }),
+
+  updateSettings: asyncHandler(async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const settings = await userService.updateSettings(userId, req.body);
+    sendSuccess(res, { settings }, 'Settings updated successfully');
+  }),
+
   uploadAvatar: asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
     const file = req.file;

@@ -34,6 +34,7 @@ export interface IMeal extends Document {
     carbs: number;
     fats: number;
   };
+  waterGlasses: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -74,6 +75,7 @@ const MealSchema = new Schema<IMeal>(
       carbs:    { type: Number, default: 0 },
       fats:     { type: Number, default: 0 },
     },
+    waterGlasses: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

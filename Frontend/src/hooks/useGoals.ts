@@ -69,3 +69,15 @@ export function useSetGoals() {
     },
   });
 }
+
+// ── Auto-Calculate Goals from Profile ───────────────────────────────────
+
+export function useAutoCalculateGoals() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => goalsApi.autoCalculateGoals(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: goalKeys.all });
+    },
+  });
+}

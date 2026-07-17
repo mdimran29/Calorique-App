@@ -49,8 +49,10 @@ export const aiController = {
       activityLevel:  body.activityLevel ?? user?.activityLevel ?? 'moderate',
       foodPreference: DIET_MAP[rawDiet]  ?? rawDiet,
       budget:         BUDGET_MAP[rawBudget] ?? rawBudget,
+      budgetAmountInr: body.budgetAmountInr ? Number(body.budgetAmountInr) : undefined,
       allergies:      body.allergies     ?? user?.allergies     ?? [],
       mealsPerDay:    body.mealsPerDay   ?? 4,
+      notes:          body.notes,
       // Pass through frontend-selected values to the prompt
       fitnessGoalLabel: rawGoal,
       dietTypeLabel:    rawDiet,

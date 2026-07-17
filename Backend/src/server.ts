@@ -8,11 +8,14 @@ import { connectDB } from './config/db';
 import { initFirebase } from './config/firebase';
 import { initCloudinary } from './config/cloudinary';
 import { logger } from './utils/logger';
+import { validateEnv } from './utils/validateEnv';
 
 const PORT = process.env.PORT ?? 5000;
 
 async function start() {
   try {
+    validateEnv();
+
     // Initialize services
     initFirebase();
     initCloudinary();
@@ -38,6 +41,11 @@ process.on('SIGTERM', () => {
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled rejection', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception — shutting down', err);
+  process.exit(1);
 });
 
 start();

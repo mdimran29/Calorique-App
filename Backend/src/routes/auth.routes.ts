@@ -14,11 +14,15 @@ const router = Router();
 router.post(
   '/register',
   [
-    body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+    // Email is required for password signup; Google/Phone signup identifies via firebaseToken instead
+    body('email')
+      .if(body('firebaseToken').not().exists())
+      .isEmail().normalizeEmail().withMessage('Valid email required'),
+    body('email').optional({ values: 'falsy' }).isEmail().normalizeEmail(),
     body('name').optional().trim().isLength({ min: 2, max: 50 }),
     body('displayName').optional().trim(),
     body('password').optional().isLength({ min: 6 }),
-    body('firebaseToken').optional(),
+    body('firebaseToken').optional().isString(),
     body('age').optional().isInt({ min: 13, max: 120 }),
     body('gender').optional().isIn(['male', 'female', 'other']),
     body('height').optional().isFloat({ min: 50, max: 300 }),

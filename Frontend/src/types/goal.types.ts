@@ -1,17 +1,17 @@
 // types/goal.types.ts — Goal interface
 
+export type FitnessGoal = 'muscle_gain' | 'fat_loss' | 'lean_bulk' | 'maintenance';
+
 export interface NutritionGoal {
-  id: string;
+  _id?: string;
   userId: string;
-  dailyCalories: number;
-  dailyProtein: number;      // grams
-  dailyCarbs: number;        // grams
-  dailyFat: number;          // grams
-  dailyFiber?: number;       // grams
-  dailyWaterGlasses: number;
-  targetWeightKg: number;
-  fitnessGoal: 'muscle_gain' | 'fat_loss' | 'lean_bulk' | 'maintenance';
-  weeklyWeightGoalKg?: number;   // e.g. -0.5 for 0.5kg loss/week
+  targetCalories: number;
+  targetProtein: number;     // grams
+  targetCarbs: number;       // grams
+  targetFats: number;        // grams
+  targetWeight?: number;
+  targetWaterIntake: number; // liters
+  fitnessGoal?: FitnessGoal;
   createdAt: string;
   updatedAt: string;
 }
@@ -32,11 +32,11 @@ export interface GoalProgress {
 }
 
 export interface SetGoalPayload {
-  dailyCalories: number;
-  dailyProtein: number;
-  dailyCarbs: number;
-  dailyFat: number;
-  dailyWaterGlasses: number;
-  targetWeightKg: number;
-  fitnessGoal: NutritionGoal['fitnessGoal'];
+  targetCalories: number;
+  targetProtein: number;
+  targetCarbs: number;
+  targetFats: number;
+  targetWeight?: number;
+  targetWaterIntake?: number;
+  fitnessGoal?: FitnessGoal;
 }

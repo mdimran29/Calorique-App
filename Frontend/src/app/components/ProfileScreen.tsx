@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Check, ChevronRight, Bell, Moon, Shield, LogOut, Crown, X } from "lucide-react";
+import { Check, ChevronRight, Bell, Moon, Shield, LogOut, Crown, X, Trash2 } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { userApi, type UpdateProfilePayload } from "../../api/user.api";const gc = {
+import { userApi, type UpdateProfilePayload } from "../../api/user.api";
+
+const gc = {
   background: "rgba(28, 28, 30, 0.75)",
   backdropFilter: "blur(20px)",
   borderRadius: "20px",
@@ -42,22 +44,49 @@ function Toggle({ value, onChange, color = "#4CAF50" }: { value: boolean; onChan
   );
 }
 
+const DEFAULT_SETTINGS = { theme: "dark" as const, notifications: true, mealReminders: true, waterReminders: true };
+
 export default function ProfileScreen() {
   const { user, logout, updateUser } = useAuth();
   const queryClient = useQueryClient();
 
-  const [mealReminders, setMealReminders] = useState(true);
-  const [waterReminders, setWaterReminders] = useState(true);
-  const [darkMode, setDarkMode] = useState(true);
-  const [notifications, setNotifications] = useState(true);
-
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<UpdateProfilePayload>({});
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
   const { data: profileData, isLoading } = useQuery({
     queryKey: ['profile'],
     queryFn: () => userApi.getProfile(),
     enabled: !!user,
+  });
+
+  const settings = profileData?.settings ?? DEFAULT_SETTINGS;
+
+  const updateSettingsMutation = useMutation({
+    mutationFn: (payload: Partial<typeof DEFAULT_SETTINGS>) => userApi.updateSettings(payload),
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: ['profile'] });
+      const previous = queryClient.getQueryData<typeof profileData>(['profile']);
+      queryClient.setQueryData(['profile'], (old: any) => old && { ...old, settings: { ...old.settings, ...payload } });
+      return { previous };
+    },
+    onError: (_err, _payload, context) => {
+      if (context?.previous) queryClient.setQueryData(['profile'], context.previous);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['profile'] });
+    },
+  });
+
+  const toggleSetting = (key: keyof typeof DEFAULT_SETTINGS) => {
+    if (key === "theme") return;
+    updateSettingsMutation.mutate({ [key]: !settings[key] });
+  };
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: () => userApi.deleteAccount(),
+    onSuccess: () => logout(),
   });
 
   const updateProfileMutation = useMutation({
@@ -158,26 +187,31 @@ export default function ProfileScreen() {
         <div style={{ ...gc }}>
           <p style={{ color: "#555", fontSize: "10px", fontWeight: 700, letterSpacing: "0.8px", margin: "0 0 10px" }}>PREFERENCES</p>
 
-          {[
-            { icon: Moon, label: "Dark Mode", color: "#9C27B0", value: darkMode, toggle: () => setDarkMode((v) => !v) },
-            { icon: Bell, label: "Push Notifications", color: "#2196F3", value: notifications, toggle: () => setNotifications((v) => !v) },
-          ].map((item) => (
-            <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div style={{ width: "32px", height: "32px", borderRadius: "10px", background: `rgba(${item.color === "#9C27B0" ? "156,39,176" : "33,150,243"},0.14)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <item.icon size={15} color={item.color} />
-                </div>
-                <span style={{ color: "#c8c8cc", fontSize: "13px" }}>{item.label}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.04)", opacity: 0.5 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ width: "32px", height: "32px", borderRadius: "10px", background: "rgba(156,39,176,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Moon size={15} color="#9C27B0" />
               </div>
-              <Toggle value={item.value} onChange={item.toggle} color={item.color} />
+              <span style={{ color: "#c8c8cc", fontSize: "13px" }}>Dark Mode</span>
             </div>
-          ))}
+            <span style={{ color: "#555", fontSize: "10px" }}>Always on</span>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ width: "32px", height: "32px", borderRadius: "10px", background: "rgba(33,150,243,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Bell size={15} color="#2196F3" />
+              </div>
+              <span style={{ color: "#c8c8cc", fontSize: "13px" }}>Push Notifications</span>
+            </div>
+            <Toggle value={settings.notifications} onChange={() => toggleSetting("notifications")} color="#2196F3" />
+          </div>
 
           <p style={{ color: "#555", fontSize: "10px", fontWeight: 700, letterSpacing: "0.8px", margin: "12px 0 8px" }}>REMINDERS</p>
 
           {[
-            { icon: "🍽️", label: "Meal Reminders", value: mealReminders, toggle: () => setMealReminders((v) => !v) },
-            { icon: "💧", label: "Water Reminders", value: waterReminders, toggle: () => setWaterReminders((v) => !v) },
+            { icon: "🍽️", label: "Meal Reminders", key: "mealReminders" as const },
+            { icon: "💧", label: "Water Reminders", key: "waterReminders" as const },
           ].map((item) => (
             <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -186,20 +220,20 @@ export default function ProfileScreen() {
                 </div>
                 <span style={{ color: "#c8c8cc", fontSize: "13px" }}>{item.label}</span>
               </div>
-              <Toggle value={item.value} onChange={item.toggle} />
+              <Toggle value={settings[item.key]} onChange={() => toggleSetting(item.key)} />
             </div>
           ))}
 
           <p style={{ color: "#555", fontSize: "10px", fontWeight: 700, letterSpacing: "0.8px", margin: "12px 0 6px" }}>ACCOUNT</p>
 
           {[
-            { icon: Shield, label: "Privacy & Security", color: "#4CAF50" },
-            { icon: LogOut, label: "Sign Out", color: "#E91E63" },
+            { icon: Shield, label: "Privacy & Security", color: "#4CAF50", onClick: () => setShowPrivacy(true) },
+            { icon: LogOut, label: "Sign Out", color: "#E91E63", onClick: logout },
           ].map((item, idx) => (
             <motion.div
               key={item.label}
               whileTap={{ scale: 0.98 }}
-              onClick={item.label === "Sign Out" ? logout : undefined}
+              onClick={item.onClick}
               style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: idx === 0 ? "1px solid rgba(255,255,255,0.04)" : "none", cursor: "pointer" }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -293,6 +327,70 @@ export default function ProfileScreen() {
                   {updateProfileMutation.isPending ? "Saving..." : "Save Details"}
                 </button>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Privacy & Security Modal */}
+      <AnimatePresence>
+        {showPrivacy && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+              background: "rgba(0,0,0,0.8)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px"
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              style={{
+                background: "#1c1c1e", borderRadius: "24px", width: "100%", maxHeight: "80%", overflowY: "auto",
+                border: "1px solid rgba(255,255,255,0.1)", padding: "20px", display: "flex", flexDirection: "column", gap: "16px"
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ color: "#fff", margin: 0, fontSize: "18px" }}>Privacy & Security</h3>
+                <X size={20} color="#888" cursor="pointer" onClick={() => { setShowPrivacy(false); setDeleteConfirmText(""); }} />
+              </div>
+
+              <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: "12px", padding: "14px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                <p style={{ color: "#c8c8cc", fontSize: "12px", margin: 0, lineHeight: 1.6 }}>
+                  Your data (profile, meals, weight, and goals) is stored securely and used only to power your nutrition tracking and AI recommendations. We never sell your data.
+                </p>
+                <p style={{ color: "#666", fontSize: "11px", margin: 0 }}>Account email: {user?.email}</p>
+              </div>
+
+              <div style={{ background: "rgba(233,30,99,0.06)", border: "1px solid rgba(233,30,99,0.2)", borderRadius: "12px", padding: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Trash2 size={15} color="#E91E63" />
+                  <p style={{ color: "#E91E63", fontSize: "13px", fontWeight: 700, margin: 0 }}>Delete Account</p>
+                </div>
+                <p style={{ color: "#999", fontSize: "11px", margin: 0, lineHeight: 1.6 }}>
+                  This permanently deletes your account and all logged data. This cannot be undone. Type <strong>DELETE</strong> to confirm.
+                </p>
+                <input
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  placeholder="Type DELETE to confirm"
+                  style={{ padding: "10px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", color: "#fff", outline: "none", fontSize: "12px" }}
+                />
+                <button
+                  disabled={deleteConfirmText !== "DELETE" || deleteAccountMutation.isPending}
+                  onClick={() => deleteAccountMutation.mutate()}
+                  style={{
+                    padding: "11px", background: deleteConfirmText === "DELETE" ? "#E91E63" : "rgba(233,30,99,0.25)",
+                    border: "none", borderRadius: "8px", color: "#fff", fontWeight: 700, fontSize: "12px",
+                    cursor: deleteConfirmText === "DELETE" ? "pointer" : "default",
+                  }}
+                >
+                  {deleteAccountMutation.isPending ? "Deleting..." : "Permanently Delete Account"}
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}

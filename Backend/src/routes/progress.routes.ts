@@ -10,12 +10,26 @@ router.use(authenticate);
 
 router.get('/', progressController.getProgress);
 router.get('/analytics', progressController.getAnalytics);
+router.get('/calories', progressController.getCalorieHistory);
+
+router.get('/weight', progressController.getWeightHistory);
 
 router.post(
   '/weight',
-  [body('weight').isFloat({ min: 20, max: 500 }).withMessage('Weight must be between 20-500 kg')],
+  [
+    body('weightKg').isFloat({ min: 20, max: 500 }).withMessage('Weight must be between 20-500 kg'),
+    body('date').optional().matches(/^\d{4}-\d{2}-\d{2}$/),
+    body('notes').optional().isString(),
+  ],
   validate,
   progressController.logWeight
+);
+
+router.delete(
+  '/weight/:id',
+  [param('id').isMongoId()],
+  validate,
+  progressController.deleteWeightEntry
 );
 
 router.post(

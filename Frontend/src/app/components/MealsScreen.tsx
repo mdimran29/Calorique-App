@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Plus, Search, Camera, X, CheckCircle2 } from "lucide-react";
+import { Plus, Search, Camera, X, CheckCircle2, AlertCircle, Keyboard } from "lucide-react";
 import { useTodayMeals, useCreateMeal } from "../../hooks/useMeals";
 import { mealsApi } from "../../api/meals.api";
+import { nutritionApi } from "../../api/nutrition.api";
+import { useBarcodeScanner } from "../../hooks/useBarcodeScanner";
 import { today } from "../../utils/dateUtils";
 
 const gc = {
@@ -19,10 +21,17 @@ export default function MealsScreen() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedFood, setSelectedFood] = useState<any | null>(null);
   const [portionGrams, setPortionGrams] = useState(100);
-  const [isScanning, setIsScanning] = useState(false);
+  const [portionMode, setPortionMode] = useState<"pieces" | "grams">("grams");
+  const [pieceCount, setPieceCount] = useState(1);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [manualBarcode, setManualBarcode] = useState("");
+  const [isLookingUp, setIsLookingUp] = useState(false);
   const [added, setAdded] = useState(false);
   const [addTarget, setAddTarget] = useState("breakfast");
+
+  const { videoRef, status: scanStatus, isSupported: scannerSupported, start: startScan, stop: stopScan } = useBarcodeScanner();
+  const isScanning = scanStatus === "starting" || scanStatus === "scanning";
 
   const todayStr = today();
   const { data: mealsResponse, isLoading } = useTodayMeals();
@@ -52,31 +61,95 @@ export default function MealsScreen() {
     }
   }, [searchQuery]);
 
-  const handleScan = () => {
-    setIsScanning(true);
-    setScanResult(null);
-    setSelectedFood(null);
-    setTimeout(() => {
-      setIsScanning(false);
-      const mocked = { id: 99, name: "Amul Butter", calories: 717, protein: 0.9, carbs: 0.1, fat: 81, unit: "100g" };
-      setScanResult("Amul Butter — 717 kcal per 100g");
-      setSelectedFood(mocked);
-      setPortionGrams(10);
-    }, 2600);
+  // Centralizes portion defaults whenever a food is picked (search click, barcode scan).
+  // Foods with a known piece size (roti, idli, puri...) default to a pieces stepper;
+  // everything else (rice, dal, packaged/barcode items) defaults to a grams slider.
+  const selectFood = (food: any) => {
+    setSelectedFood(food);
+    if (food.pieceGrams) {
+      setPortionMode("pieces");
+      setPieceCount(1);
+      setPortionGrams(food.pieceGrams);
+    } else {
+      setPortionMode("grams");
+      setPortionGrams(100);
+    }
   };
 
-  const calcNutrient = (base: number) => Math.round(((base || 0) * portionGrams) / 100 * 10) / 10;
+  const lookupBarcode = async (barcode: string) => {
+    setIsLookingUp(true);
+    setScanError(null);
+    try {
+      const res = await nutritionApi.getBarcode(barcode);
+      const product = res.data;
+      const food = {
+        id: `barcode_${barcode}`,
+        name: product.brand ? `${product.name} (${product.brand})` : product.name,
+        calories: product.calories,
+        protein: product.protein,
+        carbs: product.carbs,
+        fat: product.fats,
+        unit: "100g",
+      };
+      setScanResult(`${food.name} — ${Math.round(food.calories)} kcal per 100g`);
+      selectFood(food);
+    } catch (err: any) {
+      setScanError(
+        err?.response?.status === 404
+          ? "Product not found for this barcode. Try searching by name instead."
+          : "Couldn't look up this barcode. Please try again."
+      );
+    } finally {
+      setIsLookingUp(false);
+    }
+  };
+
+  const handleScan = () => {
+    setScanResult(null);
+    setScanError(null);
+    setSelectedFood(null);
+    startScan((code) => {
+      stopScan();
+      lookupBarcode(code);
+    });
+  };
+
+  const handleManualBarcodeSubmit = () => {
+    if (!manualBarcode.trim()) return;
+    setScanResult(null);
+    setSelectedFood(null);
+    lookupBarcode(manualBarcode.trim());
+  };
+
+  // Dataset macros are given per the food's natural unit: per-piece for piece foods
+  // (e.g. Roti = 104 kcal per 40g piece), per-100g otherwise. The scale factor
+  // reflects how many "natural units" the chosen portion represents.
+  const scaleFactor =
+    portionMode === "pieces" && selectedFood?.pieceGrams
+      ? pieceCount
+      : portionGrams / 100;
+
+  const calcNutrient = (base: number) => Math.round((base || 0) * scaleFactor * 10) / 10;
+
+  const resetPortionState = () => {
+    setPortionMode("grams");
+    setPortionGrams(100);
+    setPieceCount(1);
+  };
 
   const handleAdd = () => {
     if (!selectedFood) return;
-    
+
+    const quantity = portionMode === "pieces" && selectedFood.pieceGrams ? pieceCount : portionGrams;
+    const unit = portionMode === "pieces" && selectedFood.pieceGrams ? (selectedFood.pieceLabel ?? "piece") : "g";
+
     createMealMutation.mutate({
       date: todayStr,
       type: addTarget,
       foods: [{
         name: selectedFood.name,
-        quantity: portionGrams,
-        unit: "g",
+        quantity,
+        unit,
         calories: calcNutrient(selectedFood.calories),
         protein: calcNutrient(selectedFood.protein),
         carbs: calcNutrient(selectedFood.carbs),
@@ -91,7 +164,7 @@ export default function MealsScreen() {
           setSearchQuery("");
           setSelectedFood(null);
           setScanResult(null);
-          setPortionGrams(100);
+          resetPortionState();
         }, 1400);
       },
       onError: (err) => {
@@ -102,12 +175,14 @@ export default function MealsScreen() {
   };
 
   const closeModal = () => {
+    stopScan();
     setShowModal(false);
     setSearchQuery("");
     setSelectedFood(null);
     setScanResult(null);
-    setIsScanning(false);
-    setPortionGrams(100);
+    setScanError(null);
+    setManualBarcode("");
+    resetPortionState();
   };
 
   return (
@@ -127,6 +202,22 @@ export default function MealsScreen() {
           </div>
         </div>
 
+        {/* Daily Macros Summary */}
+        {!isLoading && dailyTotals.calories > 0 && (
+          <div style={{ ...gc, marginBottom: "10px", display: "flex", gap: "8px" }}>
+            {[
+              { label: "Protein", value: dailyTotals.protein, color: "#E91E63" },
+              { label: "Carbs", value: dailyTotals.carbs, color: "#FF9800" },
+              { label: "Fat", value: dailyTotals.fats, color: "#9C27B0" },
+            ].map((m) => (
+              <div key={m.label} style={{ flex: 1, textAlign: "center" }}>
+                <p style={{ color: m.color, fontSize: "16px", fontWeight: 800, margin: 0 }}>{Math.round(m.value * 10) / 10}g</p>
+                <p style={{ color: "#666", fontSize: "10px", margin: "2px 0 0" }}>{m.label}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Meal cards */}
         {isLoading ? (
           <div style={{ textAlign: 'center', padding: '20px', color: '#888' }}>Loading meals...</div>
@@ -134,6 +225,9 @@ export default function MealsScreen() {
           MEAL_CATEGORIES.map((cat) => {
             const catMeals = loggedMeals.filter((m: any) => m.type === cat.type);
             const totalCal = catMeals.reduce((acc: number, m: any) => acc + m.totalCalories, 0);
+            const totalProtein = catMeals.reduce((acc: number, m: any) => acc + m.totalProtein, 0);
+            const totalCarbs = catMeals.reduce((acc: number, m: any) => acc + m.totalCarbs, 0);
+            const totalFats = catMeals.reduce((acc: number, m: any) => acc + m.totalFats, 0);
             const isEmpty = catMeals.length === 0;
 
             return (
@@ -148,7 +242,12 @@ export default function MealsScreen() {
                     <div>
                       <p style={{ color: "#fff", fontSize: "13px", fontWeight: 700, margin: 0 }}>{cat.label}</p>
                       {!isEmpty && (
-                        <p style={{ color: cat.color, fontSize: "11px", fontWeight: 600, margin: 0 }}>{Math.round(totalCal)} kcal</p>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <p style={{ color: cat.color, fontSize: "11px", fontWeight: 600, margin: 0 }}>{Math.round(totalCal)} kcal</p>
+                          <p style={{ color: "#555", fontSize: "10px", margin: 0 }}>
+                            · P:{Math.round(totalProtein)}g C:{Math.round(totalCarbs)}g F:{Math.round(totalFats)}g
+                          </p>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -178,9 +277,16 @@ export default function MealsScreen() {
                     {catMeals.map((meal: any, i: number) => (
                       <div key={i}>
                         {meal.foods.map((food: any, fi: number) => (
-                          <div key={fi} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", background: "rgba(255,255,255,0.03)", borderRadius: "8px", marginBottom: "4px" }}>
-                            <span style={{ color: "#b0b0b8", fontSize: "12px" }}>{food.name} ({food.quantity}{food.unit})</span>
-                            <span style={{ color: cat.color, fontSize: "12px", fontWeight: 600 }}>{Math.round(food.calories)}</span>
+                          <div key={fi} style={{ padding: "8px 10px", background: "rgba(255,255,255,0.03)", borderRadius: "8px", marginBottom: "4px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span style={{ color: "#b0b0b8", fontSize: "12px" }}>{food.name} ({food.quantity}{food.unit})</span>
+                              <span style={{ color: cat.color, fontSize: "12px", fontWeight: 600 }}>{Math.round(food.calories)} kcal</span>
+                            </div>
+                            <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                              <span style={{ color: "#E91E63", fontSize: "10px" }}>P: {Math.round(food.protein * 10) / 10}g</span>
+                              <span style={{ color: "#FF9800", fontSize: "10px" }}>C: {Math.round(food.carbs * 10) / 10}g</span>
+                              <span style={{ color: "#9C27B0", fontSize: "10px" }}>F: {Math.round(food.fats * 10) / 10}g</span>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -267,9 +373,15 @@ export default function MealsScreen() {
                   </motion.button>
                 </div>
 
-                {/* Scanner viewport */}
+                {/* Scanner viewport — real camera feed via BarcodeDetector */}
                 {isScanning && (
-                  <div style={{ marginBottom: "12px", borderRadius: "14px", overflow: "hidden", position: "relative", height: "110px", background: "#000" }}>
+                  <div style={{ marginBottom: "12px", borderRadius: "14px", overflow: "hidden", position: "relative", height: "150px", background: "#000" }}>
+                    <video
+                      ref={videoRef}
+                      muted
+                      playsInline
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    />
                     <div style={{ position: "absolute", top: "10px", left: "10px", width: "18px", height: "18px", borderTop: "2px solid #4CAF50", borderLeft: "2px solid #4CAF50", borderRadius: "2px 0 0 0" }} />
                     <div style={{ position: "absolute", top: "10px", right: "10px", width: "18px", height: "18px", borderTop: "2px solid #4CAF50", borderRight: "2px solid #4CAF50", borderRadius: "0 2px 0 0" }} />
                     <div style={{ position: "absolute", bottom: "10px", left: "10px", width: "18px", height: "18px", borderBottom: "2px solid #4CAF50", borderLeft: "2px solid #4CAF50", borderRadius: "0 0 0 2px" }} />
@@ -279,7 +391,55 @@ export default function MealsScreen() {
                       transition={{ repeat: Infinity, duration: 1.4, ease: "linear" }}
                       style={{ position: "absolute", left: "10px", right: "10px", height: "2px", background: "rgba(76,175,80,0.9)", boxShadow: "0 0 10px #4CAF50, 0 0 20px #4CAF50" }}
                     />
-                    <p style={{ position: "absolute", bottom: "6px", left: "50%", transform: "translateX(-50%)", color: "#4CAF50", fontSize: "10px", margin: 0, whiteSpace: "nowrap" }}>Scanning barcode...</p>
+                    <p style={{ position: "absolute", bottom: "6px", left: "50%", transform: "translateX(-50%)", color: "#4CAF50", fontSize: "10px", margin: 0, whiteSpace: "nowrap" }}>Point camera at barcode...</p>
+                  </div>
+                )}
+
+                {isLookingUp && (
+                  <div style={{ marginBottom: "12px", padding: "12px", textAlign: "center", color: "#888", fontSize: "12px" }}>
+                    Looking up product...
+                  </div>
+                )}
+
+                {/* Unsupported browser fallback — manual barcode entry */}
+                {!scannerSupported && !selectedFood && (
+                  <div style={{ marginBottom: "12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "12px", padding: "12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                      <Keyboard size={13} color="#666" />
+                      <p style={{ color: "#888", fontSize: "11px", margin: 0 }}>Camera scan isn't supported in this browser — enter barcode manually</p>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <input
+                        value={manualBarcode}
+                        onChange={(e) => setManualBarcode(e.target.value.replace(/\D/g, ""))}
+                        onKeyDown={(e) => e.key === "Enter" && handleManualBarcodeSubmit()}
+                        placeholder="e.g. 8901058851279"
+                        inputMode="numeric"
+                        style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", padding: "8px 10px", color: "#fff", fontSize: "12px", outline: "none" }}
+                      />
+                      <motion.button
+                        whileTap={{ scale: 0.95 }}
+                        onClick={handleManualBarcodeSubmit}
+                        disabled={!manualBarcode.trim() || isLookingUp}
+                        style={{ background: "#4CAF50", border: "none", borderRadius: "8px", padding: "8px 14px", color: "#fff", fontSize: "12px", fontWeight: 700, cursor: manualBarcode.trim() ? "pointer" : "default", opacity: manualBarcode.trim() ? 1 : 0.5 }}
+                      >
+                        Look up
+                      </motion.button>
+                    </div>
+                  </div>
+                )}
+
+                {scanStatus === "denied" && (
+                  <div style={{ marginBottom: "12px", padding: "10px 12px", background: "rgba(233,30,99,0.08)", border: "1px solid rgba(233,30,99,0.25)", borderRadius: "10px", display: "flex", alignItems: "center", gap: "7px" }}>
+                    <AlertCircle size={14} color="#E91E63" />
+                    <p style={{ color: "#E91E63", fontSize: "11px", margin: 0 }}>Camera access denied. Enable it in your browser settings, or enter the barcode manually below.</p>
+                  </div>
+                )}
+
+                {scanError && (
+                  <div style={{ marginBottom: "12px", padding: "10px 12px", background: "rgba(233,30,99,0.08)", border: "1px solid rgba(233,30,99,0.25)", borderRadius: "10px", display: "flex", alignItems: "center", gap: "7px" }}>
+                    <AlertCircle size={14} color="#E91E63" />
+                    <p style={{ color: "#E91E63", fontSize: "11px", margin: 0 }}>{scanError}</p>
                   </div>
                 )}
 
@@ -301,7 +461,7 @@ export default function MealsScreen() {
                       <motion.div
                         key={food.id}
                         whileTap={{ scale: 0.99, background: "rgba(255,255,255,0.05)" }}
-                        onClick={() => { setSelectedFood(food); setSearchQuery(food.name); setPortionGrams(100); }}
+                        onClick={() => { selectFood(food); setSearchQuery(food.name); }}
                         style={{
                           display: "flex", justifyContent: "space-between", alignItems: "center",
                           padding: "11px 14px", cursor: "pointer",
@@ -314,7 +474,7 @@ export default function MealsScreen() {
                         </div>
                         <div style={{ textAlign: "right" }}>
                           <p style={{ color: "#FF9800", fontSize: "13px", fontWeight: 700, margin: 0 }}>{food.calories}</p>
-                          <p style={{ color: "#555", fontSize: "10px", margin: 0 }}>kcal/100g</p>
+                          <p style={{ color: "#555", fontSize: "10px", margin: 0 }}>kcal / {food.pieceLabel ? `1 ${food.pieceLabel}` : "100g"}</p>
                         </div>
                       </motion.div>
                     ))}
@@ -325,21 +485,74 @@ export default function MealsScreen() {
                 {selectedFood && (
                   <div>
                     <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: "12px", padding: "12px", marginBottom: "12px" }}>
-                      <p style={{ color: "#fff", fontSize: "13px", fontWeight: 600, margin: "0 0 8px" }}>{selectedFood.name}</p>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-                        <span style={{ color: "#b0b0b8", fontSize: "12px" }}>Portion Size</span>
-                        <span style={{ color: "#FF9800", fontSize: "12px", fontWeight: 700 }}>{portionGrams}g</span>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                        <p style={{ color: "#fff", fontSize: "13px", fontWeight: 600, margin: 0 }}>{selectedFood.name}</p>
+                        {selectedFood.pieceGrams && (
+                          <div style={{ display: "flex", background: "rgba(255,255,255,0.05)", borderRadius: "8px", padding: "2px" }}>
+                            {(["pieces", "grams"] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                onClick={() => {
+                                  if (mode === portionMode) return;
+                                  if (mode === "pieces") {
+                                    setPieceCount(Math.max(1, Math.round(portionGrams / selectedFood.pieceGrams)));
+                                    setPortionMode("pieces");
+                                  } else {
+                                    setPortionGrams(pieceCount * selectedFood.pieceGrams);
+                                    setPortionMode("grams");
+                                  }
+                                }}
+                                style={{
+                                  background: portionMode === mode ? "#FF9800" : "transparent",
+                                  border: "none", borderRadius: "6px", padding: "5px 10px", cursor: "pointer",
+                                  color: portionMode === mode ? "#fff" : "#888", fontSize: "11px", fontWeight: portionMode === mode ? 700 : 400,
+                                  textTransform: "capitalize",
+                                }}
+                              >
+                                {mode === "pieces" ? (selectedFood.pieceLabel ? `${selectedFood.pieceLabel}s` : "pieces") : "grams"}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <input
-                        type="range" min={10} max={500} step={5}
-                        value={portionGrams}
-                        onChange={(e) => setPortionGrams(Number(e.target.value))}
-                        style={{ width: "100%", accentColor: "#FF9800", marginBottom: "4px", cursor: "pointer" }}
-                      />
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#444", fontSize: "10px" }}>10g</span>
-                        <span style={{ color: "#444", fontSize: "10px" }}>500g</span>
-                      </div>
+
+                      {portionMode === "pieces" && selectedFood.pieceGrams ? (
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ color: "#b0b0b8", fontSize: "12px" }}>
+                            Quantity <span style={{ color: "#555" }}>({selectedFood.pieceGrams}g per {selectedFood.pieceLabel ?? "piece"})</span>
+                          </span>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <motion.button
+                              whileTap={{ scale: 0.88 }}
+                              onClick={() => setPieceCount((c) => Math.max(1, c - 1))}
+                              style={{ width: "28px", height: "28px", borderRadius: "8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: "16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                            >−</motion.button>
+                            <span style={{ color: "#FF9800", fontSize: "16px", fontWeight: 800, minWidth: "20px", textAlign: "center" }}>{pieceCount}</span>
+                            <motion.button
+                              whileTap={{ scale: 0.88 }}
+                              onClick={() => setPieceCount((c) => Math.min(20, c + 1))}
+                              style={{ width: "28px", height: "28px", borderRadius: "8px", background: "rgba(255,152,0,0.15)", border: "1px solid rgba(255,152,0,0.4)", color: "#FF9800", fontSize: "16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                            >+</motion.button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                            <span style={{ color: "#b0b0b8", fontSize: "12px" }}>Portion Size</span>
+                            <span style={{ color: "#FF9800", fontSize: "12px", fontWeight: 700 }}>{portionGrams}g</span>
+                          </div>
+                          <input
+                            type="range" min={10} max={500} step={5}
+                            value={portionGrams}
+                            onChange={(e) => setPortionGrams(Number(e.target.value))}
+                            style={{ width: "100%", accentColor: "#FF9800", marginBottom: "4px", cursor: "pointer" }}
+                          />
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ color: "#444", fontSize: "10px" }}>10g</span>
+                            <span style={{ color: "#444", fontSize: "10px" }}>500g</span>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", gap: "6px", marginBottom: "14px" }}>

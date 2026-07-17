@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { Droplets, Zap, Plus } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
-import { useDailySummary } from "../../hooks/useMeals";
+import { useDailySummary, useLogWater } from "../../hooks/useMeals";
+import { useGoals } from "../../hooks/useGoals";
 import { today } from "../../utils/dateUtils";
 import { useQuery } from "@tanstack/react-query";
 import { userApi } from "../../api/user.api";
@@ -44,10 +45,12 @@ function MacroBar({ name, current, target, color, tag }: { name: string, current
 }
 
 export default function HomeScreen() {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const currentDate = today();
   const { data: summaryResponse } = useDailySummary(currentDate);
-  const [glasses, setGlasses] = useState(5);
+  const { data: goalsRes } = useGoals();
+  const logWaterMutation = useLogWater();
+  const [glasses, setGlasses] = useState(0);
 
   const { data: profileData } = useQuery({
     queryKey: ['profile'],
@@ -55,8 +58,28 @@ export default function HomeScreen() {
     enabled: !!user,
   });
 
+  // Streak is computed server-side on each profile fetch — keep the auth store in sync
+  useEffect(() => {
+    if (typeof profileData?.stats?.currentStreak === "number" && profileData.stats.currentStreak !== user?.streak) {
+      updateUser({ streak: profileData.stats.currentStreak });
+    }
+  }, [profileData?.stats?.currentStreak]);
+
   const dailyTotals = summaryResponse?.data?.dailyTotals || { calories: 0, protein: 0, carbs: 0, fats: 0 };
   const CALORIES_EATEN = Math.round(dailyTotals.calories);
+  const waterGoalGlasses = goalsRes?.data ? Math.round((goalsRes.data.targetWaterIntake ?? 2.5) / 0.25) : 10;
+
+  // Sync local glass count from the server once the day's summary loads
+  useEffect(() => {
+    const serverGlasses = (summaryResponse?.data as any)?.waterGlasses;
+    if (typeof serverGlasses === "number") setGlasses(serverGlasses);
+  }, [summaryResponse?.data]);
+
+  const logGlasses = (count: number) => {
+    const clamped = Math.max(0, Math.min(waterGoalGlasses, count));
+    setGlasses(clamped);
+    logWaterMutation.mutate({ date: currentDate, glasses: clamped });
+  };
 
   // ── TDEE calculation from profile (Mifflin-St Jeor) ──────────────────
   function calcTDEE(p: typeof profileData): { calories: number; protein: number; carbs: number; fats: number } {
@@ -195,7 +218,7 @@ export default function HomeScreen() {
             transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut" }}
             style={{ fontSize: "30px" }}
           >🔥</motion.span>
-          <span style={{ color: "#FF9800", fontSize: "26px", fontWeight: 800, lineHeight: 1, marginTop: "4px" }}>7</span>
+          <span style={{ color: "#FF9800", fontSize: "26px", fontWeight: 800, lineHeight: 1, marginTop: "4px" }}>{user?.streak ?? 0}</span>
           <span style={{ color: "#777", fontSize: "10px", textAlign: "center" }}>Day Streak!</span>
         </motion.div>
 
@@ -207,12 +230,12 @@ export default function HomeScreen() {
             <div>
               <p style={{ color: "#2196F3", fontSize: "12px", fontWeight: 700, margin: 0 }}>Hydration</p>
               <p style={{ color: "#666", fontSize: "10px", margin: "2px 0 0" }}>
-                {glasses}/10 glasses · {(glasses * 0.25).toFixed(2)}L
+                {glasses}/{waterGoalGlasses} glasses · {(glasses * 0.25).toFixed(2)}L
               </p>
             </div>
             <motion.button
               whileTap={{ scale: 0.88 }}
-              onClick={() => setGlasses((g) => Math.min(10, g + 1))}
+              onClick={() => logGlasses(glasses + 1)}
               style={{
                 background: "#2196F3",
                 border: "none",
@@ -230,11 +253,11 @@ export default function HomeScreen() {
             </motion.button>
           </div>
           <div style={{ display: "flex", gap: "3px", flexWrap: "wrap" }}>
-            {Array.from({ length: 10 }).map((_, i) => (
+            {Array.from({ length: waterGoalGlasses }).map((_, i) => (
               <motion.div
                 key={i}
                 whileTap={{ scale: 0.82 }}
-                onClick={() => setGlasses(i + 1)}
+                onClick={() => logGlasses(i + 1)}
                 style={{ cursor: "pointer" }}
               >
                 <Droplets

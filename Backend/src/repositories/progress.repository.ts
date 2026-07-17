@@ -15,7 +15,10 @@ export const progressRepository = {
     ) as Promise<IProgress>;
   },
 
-  async pushWeightEntry(userId: string | Types.ObjectId, entry: { weight: number; date: string }): Promise<IProgress> {
+  async pushWeightEntry(
+    userId: string | Types.ObjectId,
+    entry: { weight: number; date: string; notes?: string }
+  ): Promise<IProgress> {
     return Progress.findOneAndUpdate(
       { userId },
       { $push: { weightHistory: { $each: [entry], $sort: { date: -1 } } } },
@@ -23,7 +26,17 @@ export const progressRepository = {
     ) as Promise<IProgress>;
   },
 
+  async deleteWeightEntry(userId: string | Types.ObjectId, entryId: string): Promise<IProgress | null> {
+    return Progress.findOneAndUpdate(
+      { userId },
+      { $pull: { weightHistory: { _id: entryId } } },
+      { new: true }
+    ) as Promise<IProgress | null>;
+  },
+
   async pushCalorieEntry(userId: string | Types.ObjectId, entry: { date: string; calories: number }): Promise<IProgress> {
+    // Replace any existing entry for the same date (calories are recomputed per meal edit)
+    await Progress.updateOne({ userId }, { $pull: { calorieHistory: { date: entry.date } } }, { upsert: false });
     return Progress.findOneAndUpdate(
       { userId },
       { $push: { calorieHistory: { $each: [entry], $sort: { date: -1 } } } },
@@ -32,6 +45,7 @@ export const progressRepository = {
   },
 
   async pushWaterEntry(userId: string | Types.ObjectId, entry: { date: string; liters: number }): Promise<IProgress> {
+    await Progress.updateOne({ userId }, { $pull: { waterHistory: { date: entry.date } } }, { upsert: false });
     return Progress.findOneAndUpdate(
       { userId },
       { $push: { waterHistory: { $each: [entry], $sort: { date: -1 } } } },

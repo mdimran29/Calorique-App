@@ -34,7 +34,8 @@ export const userApi = {
             daysActive: u?.daysActive || 0,
             mealsLogged: u?.mealsLogged || 0,
             goalsHit: u?.goalsHit || 0,
-          }
+          },
+          settings: u?.settings as UserSettings | undefined,
         };
       }),
 
@@ -76,8 +77,8 @@ export const userApi = {
    */
   updateSettings: (settings: Partial<UserSettings>) =>
     apiClient
-      .put<ApiResponse<UserSettings>>('/users/settings', settings)
-      .then((r) => r.data),
+      .put<ApiResponse<{ settings: UserSettings }>>('/users/settings', settings)
+      .then((r) => ({ ...r.data, data: r.data.data.settings })),
 
   /**
    * Delete account

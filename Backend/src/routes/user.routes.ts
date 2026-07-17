@@ -32,4 +32,18 @@ router.put(
 
 router.post('/avatar', upload.single('avatar'), userController.uploadAvatar);
 
+router.delete('/profile', userController.deleteAccount);
+
+router.put(
+  '/settings',
+  [
+    body('theme').optional().isIn(['dark', 'light']),
+    body('notifications').optional().isBoolean(),
+    body('mealReminders').optional().isBoolean(),
+    body('waterReminders').optional().isBoolean(),
+  ],
+  validate,
+  userController.updateSettings
+);
+
 export default router;

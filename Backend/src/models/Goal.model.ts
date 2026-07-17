@@ -9,6 +9,7 @@ export interface IGoal extends Document {
   targetFats: number;
   targetWeight?: number;
   targetWaterIntake: number;
+  fitnessGoal?: 'muscle_gain' | 'fat_loss' | 'lean_bulk' | 'maintenance';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,6 +23,7 @@ const GoalSchema = new Schema<IGoal>(
     targetFats:        { type: Number, required: true },
     targetWeight:      { type: Number },
     targetWaterIntake: { type: Number, default: 3 },
+    fitnessGoal:       { type: String, enum: ['muscle_gain', 'fat_loss', 'lean_bulk', 'maintenance'] },
   },
   { timestamps: true }
 );

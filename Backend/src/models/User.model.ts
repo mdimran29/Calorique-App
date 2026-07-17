@@ -1,10 +1,19 @@
 // src/models/User.model.ts
 import { Schema, model, Document } from 'mongoose';
 
+export interface IUserSettings {
+  theme: 'dark' | 'light';
+  notifications: boolean;
+  mealReminders: boolean;
+  waterReminders: boolean;
+}
+
 export interface IUser extends Document {
   firebaseUid: string;
   name: string;
   email: string;
+  phoneNumber?: string;
+  authProvider: 'password' | 'google' | 'phone';
   avatar?: string;
   age?: number;
   gender?: 'male' | 'female' | 'other';
@@ -21,15 +30,28 @@ export interface IUser extends Document {
   fcmToken?: string;
   streak: number;
   lastActiveDate?: Date;
+  settings: IUserSettings;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const UserSettingsSchema = new Schema<IUserSettings>(
+  {
+    theme:           { type: String, enum: ['dark', 'light'], default: 'dark' },
+    notifications:   { type: Boolean, default: true },
+    mealReminders:   { type: Boolean, default: true },
+    waterReminders:  { type: Boolean, default: true },
+  },
+  { _id: false }
+);
 
 const UserSchema = new Schema<IUser>(
   {
     firebaseUid:    { type: String, required: true, unique: true, index: true },
     name:           { type: String, required: true, minlength: 2, maxlength: 50 },
     email:          { type: String, required: true, unique: true, lowercase: true },
+    phoneNumber:    { type: String, unique: true, sparse: true },
+    authProvider:   { type: String, enum: ['password', 'google', 'phone'], default: 'password' },
     avatar:         { type: String, default: null },
     age:            { type: Number, min: 13, max: 120 },
     gender:         { type: String, enum: ['male', 'female', 'other'] },
@@ -46,6 +68,7 @@ const UserSchema = new Schema<IUser>(
     fcmToken:       { type: String },
     streak:         { type: Number, default: 0 },
     lastActiveDate: { type: Date },
+    settings:       { type: UserSettingsSchema, default: () => ({}) },
   },
   { timestamps: true }
 );
