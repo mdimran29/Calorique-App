@@ -21,11 +21,11 @@ async function start() {
     initCloudinary();
     await connectDB();
 
-    // Start HTTP server
-    app.listen(PORT, () => {
-      logger.info(`🚀 Calorique API running on http://localhost:${PORT}`);
+    // Start HTTP server — bind 0.0.0.0 so container platforms can route to it
+    app.listen(Number(PORT), '0.0.0.0', () => {
+      logger.info(`🚀 Calorique API listening on port ${PORT}`);
       logger.info(`🌍 Environment: ${process.env.NODE_ENV ?? 'development'}`);
-      logger.info(`📡 Health check: http://localhost:${PORT}/api/v1/health`);
+      logger.info(`📡 Health check: /api/v1/health`);
     });
   } catch (err) {
     logger.error('Failed to start server', err);

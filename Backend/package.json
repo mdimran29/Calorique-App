@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Nutrivora AI Backend — Calorique",
   "main": "dist/server.js",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "dev": "nodemon --exec ts-node src/server.ts",
     "build": "tsc",

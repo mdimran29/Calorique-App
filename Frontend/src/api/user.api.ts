@@ -85,4 +85,12 @@ export const userApi = {
    */
   deleteAccount: () =>
     apiClient.delete<ApiResponse<null>>('/users/profile').then((r) => r.data),
+
+  /**
+   * Register this device's native FCM token for push reminders
+   */
+  updateFcmToken: (fcmToken: string) =>
+    apiClient
+      .put<ApiResponse<null>>('/users/fcm-token', { fcmToken })
+      .then((r) => r.data),
 };

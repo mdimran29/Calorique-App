@@ -18,6 +18,10 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:5174',
+  // Capacitor native WebView origins — the Android/iOS shell sends these, not FRONTEND_URL
+  'capacitor://localhost',
+  'ionic://localhost',
+  'https://localhost',
   process.env.FRONTEND_URL,
 ].filter(Boolean) as string[];
 
